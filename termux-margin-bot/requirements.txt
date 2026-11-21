@@ -1,0 +1,7 @@
+# Termux'ta `cryptography` pip ile DEGIL, `pkg install python-cryptography` ile kurulur.
+# ccxt `--no-deps` ile kurulur (aiohttp/yarl gibi C derlemesi gerektiren async
+# bagimliliklarini cekmesin diye). Bot yalnizca ccxt'nin senkron API'sini kullanir.
+ccxt==4.5.93
+requests>=2.31
+certifi>=2024.2.2
+typing_extensions>=4.9
