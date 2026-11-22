@@ -180,6 +180,45 @@ Korumalar:
 
 ---
 
+## İşlem şeması: sabit 30$ × 5x (`RISK_MODE=fixed`, varsayılan)
+
+Kullanıcı tercihi olarak her işlem **30 USDT marjin × 5x = 150 USDT** pozisyonla açılır:
+
+| | Kural |
+|---|---|
+| Giriş | Supertrend(10,3) dönüşü + EMA200 yönü (yukarıdaki strateji) |
+| Hedef (TP) | Net kâr ≥ marjinin **%25**'i (≈ 7.5 USDT; komisyon+kayma dahil, fiyat ≈ %5.1) |
+| Stop (SL) | Net zarar **tam 2.5 USDT** (komisyon+kayma dahil, fiyat ≈ %1.5) |
+| Pozisyon | Bakiye 30 USDT'de borsa giriş komisyonunu da istediği için ~145 USDT açılır; stop/hedef gerçek nominale göre hesaplanır, zarar yine tam 2.5$ |
+
+> ⚠️ **Bu şema 4 yıllık testte zarar etti:** aynı Supertrend girişleriyle işlem başına
+> **−0.09R**, kâr faktörü 0.89 (tasarım ve görülmemiş dönemde aynı). 2 saatlik grafikte
+> %1.5'lik stop normal fiyat gürültüsünün içinde kalıyor; işlemlerin ~%74'ü hedefe
+> ulaşmadan stop oluyor. Kullanıcı kararıyla varsayılan yapıldı; **paper modda izleyin**.
+> `RISK_MODE=risk` test edilen kârlı şemaya (Supertrend iz süren stop) döner.
+
+## Coin evreni: Top 30 ve meme coin güvenliği
+
+- **`SYMBOLS=TOP30`**: işlem listesi 24 saatlik hacme göre ilk 30 coin; stabil coinler
+  (kategori + "fiyat ≈ 1$" kontrolü), tokenize altın/emtia ve wrapped tokenlar çıkarılır.
+  Borsada USDT vadelisi olanlar alınır (`1000PEPE` gibi çarpanlı adlar otomatik
+  eşleşir), **"Riskli" etiketli meme coinlerde işlem açılmaz**. Liste 6 saatte bir yenilenir.
+- **Kaynak**: `CMC_API_KEY` varsa CoinMarketCap (ücretsiz Basic anahtar, tek istekte
+  hacim + etiket + ağ), yoksa anahtarsız CoinGecko. `COINGECKO_API_KEY` (ücretsiz Demo) hızlandırır.
+- **Meme güvenlik taraması** (arka planda, hacim sırasıyla, 60 dk'da bir tazelenir):
+  GoPlus (EVM ağları + Solana), RugCheck (Solana), DexScreener (likidite, havuz yaşı).
+
+| Etiket | Ne zaman |
+|---|---|
+| 🔴 **Riskli** | Honeypot / satılamıyor · vergi > %10 · kaynak kod doğrulanmamış · sahibi bakiyeleri değiştirebilir veya mint edebilir (sahiplik bırakılmamışsa) · Solana'da mint/freeze yetkisi açık · ilk 10 cüzdan > %50 (büyük borsada listeliyse > %80) · DEX likiditesi < 100K$ (yalnızca DEX'teyse) |
+| 🟡 **Orta derece** | Küçük vergi · yükseltilebilir (proxy) kontrat · sahibi transferi durdurabilir · ilk 10 cüzdan %30–50 · LP kilitli değil · likidite 100K–1M$ · 30 günden genç · RugCheck "danger" uyarısı |
+| 🟢 **Güvenli** | Yukarıdakilerin hiçbiri yok (ör. sahipliği bırakılmış, dağılımı makul, likit) |
+| ⚪ **Taranıyor** | Veri henüz yok; ağ bilinmiyorsa **asla "güvenli" sayılmaz** |
+
+İlk 10 cüzdan payı borsa, yakım ve kilitli cüzdanlar hariç hesaplanır. Etiket
+**kontrat ve dağılım riskini** ölçer; fiyat riskini ölçmez — meme coinler aşırı oynaktır.
+Kendi ağındaki coinler (ör. DOGE) akıllı kontrat içermediği için kontrat riski taşımaz.
+
 ## Güvenlik tasarımı
 
 **Emir yürütme (`LiveBroker`):**
@@ -193,7 +232,17 @@ Korumalar:
 4. Stop-loss 3 denemede konamazsa pozisyon **derhal kapatılır**; korumasız pozisyon kalmaz.
 5. Stop taşırken önce **yeni** stop konur, sonra eskisi iptal edilir (arada korumasız an yok).
 6. Pozisyon kapanınca kalan tetik emirleri (yetim SL/TP) temizlenir.
-7. Borsada botun bilmediği pozisyon varsa uyarı verir ve o sembolde işlem açmaz.
+7. Borsada botun bilmediği pozisyon varsa uyarı verir ve o sembolde işlem açmaz
+   (kilit, pozisyon kapanınca kalkar).
+8. **Stop bekçisi**: her 60 sn borsadaki SL/TP emirleri kontrol edilir; silinmişse yeniden
+   kurulur, kurulamazsa pozisyon kapatılır. Emir listesi okunamazsa hiçbir şey yapılmaz
+   ("eksik veri = emir yok" varsayılmaz).
+9. **Güvenli tarafta açılış**: borsa ile uzlaştırma başarılı olmadan yeni işlem açılmaz
+   (15 dk'da bir tekrarlanır).
+10. **Belirsiz giriş**: giriş emrinde ağ hatası olursa emir körü körüne tekrar gönderilmez;
+    pozisyon borsada aranır, bulunursa stop konur.
+11. **Tek kopya kilidi** (`data/bot.lock`): aynı anda ikinci bot çalışamaz.
+12. API anahtarı reddedilirse ayrı uyarı; her gün "💓 Bot çalışıyor" mesajı (gelmezse bot durmuştur).
 
 **Sinyal onayı:** Varsayılan olarak her sinyal Telegram'da `✅ Pozisyonu aç / ❌ Geç`
 düğmesiyle gelir (15 dk geçerli). Onay anında fiyat sinyalden 0.5R'den fazla
@@ -324,6 +373,9 @@ Android, arka plandaki uygulamaları agresif biçimde öldürür:
 | `/durum` | Mod, bakiye, açık pozisyon, risk korumaları, sonraki analiz zamanı |
 | `/analiz` | Tüm coinler tek mesajda: fiyat, trend yönü, **sonraki işlemin tetik seviyesi** (işlem açmaz) |
 | `/analiz ETH` | Tek coin ayrıntısı: kontroller ✅/▫️, 3 borsanın spot/perp/funding tablosu, **giriş / stop / çıkış şeması** |
+| `/top30` | 24s hacme göre en büyük 30 coin (stabil coin/altın/wrapped hariç): hacim, değişim, borsadaki vadeli karşılığı ve işlemde olup olmadığı |
+| `/meme` | En hacimli 30 meme coin: **ağ** (Solana, Ethereum, Base…) ve **güvenlik etiketi** 🟢 Güvenli / 🟡 Orta derece / 🔴 Riskli |
+| `/meme PEPE` | Tek meme coin: kontrat adresi, holder sayısı, ilk 10 cüzdan payı, DEX likiditesi, yaş ve etiketin gerekçeleri |
 | `/backtest [ETH] [gün]` | Geçmiş veride test (varsayılan: tüm semboller, 365 gün; 30–1095). Borsanın gerçek asgari tutarlarıyla; isabet, kâr faktörü, maks. düşüş, long/short ayrımı, son işlemlerin giriş→çıkış fiyatları |
 | `/pozisyon` | Açık pozisyon, stop/hedef/likidasyon, gerçekleşmemiş K/Z |
 | `/kapat` | Açık pozisyonu piyasa fiyatından kapatır (onay düğmesiyle) |
@@ -389,7 +441,7 @@ uygulanmaz (canlı bot daha seçicidir). Funding ödemeleri dahil değildir.
 .venv/bin/python -m unittest discover -s tests -t . -v
 ```
 
-83 test (ağ gerektirmez):
+131 test (ağ gerektirmez):
 
 | Test | Kapsam |
 |---|---|
@@ -401,6 +453,9 @@ uygulanmaz (canlı bot daha seçicidir). Funding ödemeleri dahil değildir.
 | `test_ccxt_wire` | ccxt'nin her borsaya ürettiği **gerçek HTTP isteği** (endpoint + parametreler) |
 | `test_engine` | Uçtan uca: sinyal → onay → pozisyon → TP/SL/BE/zaman stopu → K/Z; yetkisiz sohbet; tekrar basma; seri kayıp koruması; bayat sinyal |
 | `test_supertrend` | Supertrend sinyali/planı, iz süren stopun yalnızca lehte taşınması, dönüşte çıkış, aynı mumda yeniden girişin engellenmesi, 3 pozisyon limiti, Pine referansıyla birebir Supertrend |
+| `test_phase0` | Stop bekçisi (silinen stop yeniden kurulur / kurulamazsa kapatılır / liste okunamazsa dokunulmaz), belirsiz giriş, uzlaştırma kilidi, tek kopya kilidi, ısınma (1000 mum = tam geçmiş) |
+| `test_fixed_mode` | 30$×5x şema: net zarar tam 2.5$, net kâr ≥ %25 ROI, bakiye tavanı |
+| `test_coins` | Gerçek GoPlus/RugCheck/DexScreener/CoinGecko yanıtlarıyla güvenlik sınıflandırması, stabil coin ayıklama, ağ bilgisi, 1000PEPE eşleştirme ve fiyat ölçekleme, arka plan döngüsü ve hız limiti |
 | `test_data_backtest` | 1000 mumluk sayfalı veri çekimi, snapshot matematiği, backtest muhasebesi ve canlı analizle tutarlılık |
 
 > ccxt sürümünü yükseltmeden önce `test_ccxt_wire` mutlaka çalıştırılmalıdır
