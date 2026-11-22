@@ -3,6 +3,8 @@
 Varsayimlar (bilerek kotumser):
 * Sinyal mum KAPANISINDA olusur, giris bir SONRAKI mumun ACILISINDAN + kayma.
 * Ayni mumda hem SL hem TP'ye degildiyse SL kabul edilir.
+* supertrend: stop fitilde (kotumser), cikis 2s kapanista ST donusu; stop
+  yalnizca mum kapanisindan sonra ve lehte tasinir (bakis-ileri yok).
 * Breakeven tetiklendigi mumda degil, bir sonraki mumdan itibaren gecerlidir.
 * Komisyon her iki bacakta FEE_RATE, kayma SLIPPAGE_PCT.
 * Turev filtresi (funding/OI/baz) gecmis veride uygulanmaz -> canli davranis
@@ -31,10 +33,16 @@ class BTTrade:
     tp: float
     qty: float
     r: float = 0.0  # ilk stop mesafesi (fiyat)
+    initial_sl: float = 0.0
     exit_ts: int = 0
     exit: float = 0.0
     reason: str = ""
     pnl: float = 0.0
+
+    @property
+    def r_mult(self) -> float:
+        risk = self.r * self.qty
+        return self.pnl / risk if risk > 0 else 0.0
 
 
 def fetch_history(ex, symbol: str, timeframe: str, days: int) -> List[List[float]]:
@@ -103,14 +111,14 @@ def run_backtest(
             entry = nxt[1] * (1 + slip) if s.side == "long" else nxt[1] * (1 - slip)
             d = 1 if s.side == "long" else -1
             sl = entry - d * s.sl_dist
-            tp = entry + d * s.sl_dist * cfg.tp_r_mult
+            tp = 0.0 if cfg.trailing else entry + d * s.sl_dist * cfg.tp_r_mult
             try:
                 plan = size_position(cfg, s.side, entry, sl, tp, contract_size, a2p, min_amount, min_cost, equity)
             except RiskReject:
                 rejected += 1
                 i += 1
                 continue
-            pos = BTTrade(s.side, nxt[0], entry, sl, tp, plan.base_qty, r=s.sl_dist)
+            pos = BTTrade(s.side, nxt[0], entry, sl, tp, plan.base_qty, r=s.sl_dist, initial_sl=sl)
             be_armed = False
             be_pending = False
             entry_idx = i + 1
@@ -120,6 +128,27 @@ def run_backtest(
         # --- acik pozisyon: mum i'yi isle ---
         c = candles[i]
         hi, lo, cl = c[2], c[3], c[4]
+        if cfg.trailing:
+            d = 1 if pos.side == "long" else -1
+            exit_px = None
+            if (lo <= pos.sl) if d == 1 else (hi >= pos.sl):  # borsadaki stop (fitil)
+                exit_px = pos.sl * (1 - d * cfg.slippage_pct / 100)
+                reason = "IZ-STOP" if pos.sl != pos.initial_sl else "SL"
+            elif ind["std"][i] is not None and ind["std"][i] != d:  # 2s kapanis ST donusu
+                exit_px, reason = cl, "ST-DONUS"
+            else:  # stopu yalnizca lehte tasi (sonraki mumdan gecerli)
+                if ind["std"][i] == d and ind["stl"][i] is not None and ind["atr"][i] is not None:
+                    ns = strat.st_stop(ind["stl"][i], ind["atr"][i], pos.side)
+                    if d * (ns - pos.sl) > 0:
+                        pos.sl = ns
+            if exit_px is not None:
+                pnl, _ = realized_pnl(pos.side, pos.entry, exit_px, pos.qty, cfg.fee_rate)
+                pos.exit_ts, pos.exit, pos.reason, pos.pnl = c[0] + tf_ms, exit_px, reason, pnl
+                equity += pnl
+                trades.append(pos)
+                pos = None
+            i += 1
+            continue
         if be_pending:
             be_armed, be_pending = True, False
             pos.sl = pos.entry * (1 + (1 if pos.side == "long" else -1) * 2 * cfg.fee_rate)
@@ -203,6 +232,7 @@ def report_lines(res: BTResult, start_equity: float, symbol: str, timeframe: str
         f"Islem     {st['n']} (ayda ~{st['n'] / max(days / 30, 1e-9):.1f}) | Isabet %{st['win']:.1f}",
         f"Kar fakt. {pf} | Maks. dusus %{st['mdd']:.1f}",
         f"Ort.kazanc {st['avg_win']:+.2f} | Ort.kayip {st['avg_loss']:+.2f} | Ort.sure {hold_h:.0f} sa",
+        f"Islem basi {sum(t.r_mult for t in tr) / len(tr):+.2f}R (R = stopta riske edilen tutar)",
     ]
     for side in ("long", "short"):
         sub = [t for t in tr if t.side == side]

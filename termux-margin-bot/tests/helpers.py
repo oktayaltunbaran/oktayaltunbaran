@@ -38,6 +38,30 @@ def make_candles(trend: int = 1, n: int = 320, start_ts: int = 0, signal_bar: bo
     return c
 
 
+def make_st_candles(trend: int = 1, n: int = 330, start_ts: int = 0) -> List[List[float]]:
+    """Trend -> Supertrend'i ters ceviren geri cekilme -> trend yonunde ILK donus
+    mumunda biten seri (son mum = Supertrend giris sinyali)."""
+    c: List[List[float]] = []
+    p = 100.0
+
+    def add(mult):
+        nonlocal p
+        o = p
+        p *= mult
+        c.append([start_ts + len(c) * TF, o, max(o, p) * 1.002, min(o, p) * 0.998, p, 1.0])
+
+    def st_dir():
+        return ta.supertrend([x[2] for x in c], [x[3] for x in c], [x[4] for x in c], 10, 3.0)[1][-1]
+
+    for i in range(n):
+        add(1 + trend * 0.004 * (1 if i % 5 < 3 else -0.6))
+    while st_dir() != -trend:
+        add(1 - trend * 0.012)
+    while st_dir() != trend:
+        add(1 + trend * 0.015)
+    return c
+
+
 def make_snapshot(price: float, funding: float = 0.0001, spread: float = 0.0, oi: float = 1e9) -> MarketSnapshot:
     per = {}
     for k, name in enumerate(("binance", "bybit", "okx")):
@@ -51,6 +75,12 @@ def settings(**kw) -> Settings:
     s.telegram_token = "123456:" + "A" * 35
     s.telegram_chat_id = 42
     s.data_dir = Path(tempfile.mkdtemp())
+    s.strategy = "pullback"  # eski testler pullback icin yazildi; supertrend testleri acikca secer
+    s.max_sl_pct = 4.0
+    s.risk_per_trade_usdt = 1.5
+    s.max_daily_loss_usdt = 4.5
+    s.max_consecutive_losses = 3
+    s.max_open_positions = 1
     for k, v in kw.items():
         setattr(s, k, v)
     return s

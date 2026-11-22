@@ -144,6 +144,10 @@ class TestEngineFlow(unittest.TestCase):
             t = h.st.open_trades()[0]
             h.minute(t.entry_price, t.sl * 0.99, t.sl * 0.99, offset_ms=60_000 * (k + 1) * 10)
             h.eng.monitor()
+            # kaybi onceki bir mumda gerceklesmis say (ayni mumda yeniden giris kurali)
+            c = h.st.closed_trades()[-1]
+            c.closed_at = h.candles[-2][0] - 1
+            h.st.update_trade(c)
         self.assertEqual(len(h.st.closed_trades()), 3)
         self.assertTrue(any("Koruma devrede" in m["text"] for m in h.tg.sent))
         h.st.set("last_bar:X/USDT", None)

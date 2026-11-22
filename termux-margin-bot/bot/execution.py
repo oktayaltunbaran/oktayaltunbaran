@@ -80,7 +80,11 @@ def _market_info(ex: ccxt.Exchange, symbol: str) -> MarketInfo:
 
 
 def _exit_reason(t: Trade, exit_price: float) -> str:
-    return "TP" if abs(exit_price - t.tp) < abs(exit_price - t.sl) else ("BE" if t.breakeven_done else "SL")
+    if t.tp > 0 and abs(exit_price - t.tp) < abs(exit_price - t.sl):
+        return "TP"
+    if t.breakeven_done:
+        return "BE"
+    return "IZ-STOP" if t.tp <= 0 and t.sl != t.initial_sl else "SL"
 
 
 # ============================================================== PAPER
@@ -129,10 +133,10 @@ class PaperBroker:
             "entry": entry,
             "qty": plan.qty,
             "sl": mi.price_to_precision(entry - d * sl_dist),
-            "tp": mi.price_to_precision(entry + d * tp_dist),
+            "tp": mi.price_to_precision(entry + d * tp_dist) if tp_dist > 0 else 0.0,
             "liq": plan.liq_est,
             "sl_order_id": "paper-sl",
-            "tp_order_id": "paper-tp",
+            "tp_order_id": "paper-tp" if tp_dist > 0 else None,
         }
 
     def check(self, t: Trade) -> PositionStatus:
@@ -145,11 +149,11 @@ class PaperBroker:
                 continue
             hi, lo = float(c[2]), float(c[3])
             hit_sl = lo <= t.sl if t.side == "long" else hi >= t.sl
-            hit_tp = hi >= t.tp if t.side == "long" else lo <= t.tp
+            hit_tp = t.tp > 0 and (hi >= t.tp if t.side == "long" else lo <= t.tp)
             if hit_sl:  # kotumser: ayni mumda ikisi de varsa SL
                 slip = self.cfg.slippage_pct / 100
                 ex_px = t.sl * (1 - slip) if t.side == "long" else t.sl * (1 + slip)
-                return PositionStatus(False, exit_price=ex_px, exit_reason="BE" if t.breakeven_done else "SL")
+                return PositionStatus(False, exit_price=ex_px, exit_reason=_exit_reason(t, t.sl))
             if hit_tp:
                 return PositionStatus(False, exit_price=t.tp, exit_reason="TP")
         # Son (henuz kapanmamis olabilecek) dakikayi bir sonraki turda yeniden tara;
@@ -381,7 +385,7 @@ class LiveBroker:
         mmode = (pos.get("marginMode") or "").lower()
         d = 1 if side == "long" else -1
         sl = mi.price_to_precision(entry - d * sl_dist)
-        tp = mi.price_to_precision(entry + d * tp_dist)
+        tp = mi.price_to_precision(entry + d * tp_dist) if tp_dist > 0 else 0.0
 
         problems: List[str] = []
         if self.cfg.require_isolated and mmode and mmode != "isolated":
@@ -410,10 +414,11 @@ class LiveBroker:
             raise ExecutionError(f"Stop-loss konamadi, pozisyon kapatildi: {last_err}")
 
         tp_id = None
-        try:
-            tp_id = self._place_tp(psym, side, qty, tp)
-        except Exception as e:  # noqa: BLE001
-            log.error("TP konamadi (SL aktif, izlemede tekrar denenecek): %s", e)
+        if tp > 0:
+            try:
+                tp_id = self._place_tp(psym, side, qty, tp)
+            except Exception as e:  # noqa: BLE001
+                log.error("TP konamadi (SL aktif, izlemede tekrar denenecek): %s", e)
 
         return {"entry": entry, "qty": qty, "sl": sl, "tp": tp, "liq": liq, "sl_order_id": sl_id, "tp_order_id": tp_id}
 
@@ -429,7 +434,7 @@ class LiveBroker:
         psym = perp_symbol(t.symbol)
         pos = self._fetch_position(psym, t.side)
         if pos is not None:
-            if not t.tp_order_id:  # TP eksikse tekrar dene
+            if t.tp > 0 and not t.tp_order_id:  # TP eksikse tekrar dene
                 try:
                     t.tp_order_id = self._place_tp(psym, t.side, float(pos["contracts"]), t.tp)
                 except Exception as e:  # noqa: BLE001

@@ -50,7 +50,12 @@ class TestConfig(unittest.TestCase):
         text = ex.read_text(encoding="utf-8").replace("TELEGRAM_BOT_TOKEN=\n", "").replace("TELEGRAM_CHAT_ID=\n", "")
         s = load_settings(write(BASE + text))
         self.assertEqual((s.margin_usdt, s.leverage, s.timeframe), (30.0, 5, "2h"))
-        self.assertEqual(s.symbols, ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+        self.assertEqual(len(s.symbols), 9)
+        self.assertNotIn("BTC/USDT", s.symbols)  # 30 USDT'de asgari tutara takilir
+        # 4 yillik testte secilen degerler
+        self.assertEqual((s.strategy, s.st_len, s.st_mult, s.st_stop_atr), ("supertrend", 10, 3.0, 1.0))
+        self.assertEqual((s.risk_per_trade_usdt, s.max_open_positions, s.max_sl_pct), (1.0, 3, 6.0))
+        self.assertTrue(s.trailing)
 
 
 if __name__ == "__main__":

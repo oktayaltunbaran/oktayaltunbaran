@@ -83,34 +83,49 @@ için tasarlanmış, tamamen **telefonda (Android + Termux)** çalışan Telegra
 Analiz **yalnızca kapanmış mumlarda** yapılır (canlı mum atılır → "repaint" yok).
 Her 2 saatlik kapanıştan 20 sn sonra (UTC 00:00, 02:00, …) çalışır.
 
-### Teknik koşullar (LONG; SHORT tam aynası)
+### Nasıl seçildi
 
-| # | Koşul | Amaç |
+Binance USDT-M **10 coin × 4 yıl** (Kasım 2022 – Kasım 2026, coin başına 17.772 adet
+2s mum, `data.binance.vision` arşivi) üzerinde 6 giriş × 5 çıkış şeması karşılaştırıldı.
+Girişler: pullback (eski), Supertrend, Donchian+hacim kırılımı, MACD, 6'lı konfluens
+(Supertrend+MACD+EMA50/200+günlük trend+ADX). Çıkışlar: sabit 2R/3R, kısmi kâr +
+iz süren stop, ATR iz süren stop, Supertrend dönüşü. Tasarım yalnızca
+**2022-11 – 2025-06** verisiyle yapıldı; **2025-07 – 2026-11** dönemine kurallar
+dondurulana kadar bakılmadı (görülmemiş veri, tek seferlik doğrulama).
+
+| Strateji (komisyon + kayma dahil) | Tasarım dönemi | **Görülmemiş dönem** |
 |---|---|---|
-| 1 | Kapanış > EMA200 **ve** EMA50 > EMA200 | Ana trend yukarı |
-| 2 | ADX(14) ≥ 20 | Yatay/testere piyasayı ele |
-| 3 | Son 2 mumun dibi EMA21 + 0.25·ATR'ye değmiş | Geri çekilmeden alım (tepeden değil) |
-| 4 | Kapanış > EMA21 ve mum yeşil | Trende geri dönüş teyidi |
-| 5 | RSI(14) 45–70 (short: 30–55) | Aşırı alım/satımda girme |
-| 6 | Kapanış − EMA21 ≤ 1·ATR | Kaçan fiyatı kovalama |
+| Eski: pullback, 2R hedef, breakeven | −0.12R/işlem, KF 0.78, 0/10 coin kârlı | −0.08R, KF 0.85 |
+| **Yeni: Supertrend + EMA200, ST dönüşünde çıkış** | +0.20R, KF 1.51, 8/10 | **+0.24R, KF 1.67, 9/10** |
 
-### Türev ve çapraz-borsa filtreleri (Binance + OKX + Bybit)
+R = stopta riske edilen tutar; KF = kâr faktörü. Botun kendi backtest motoru aynı
+veride araştırma düzeneğiyle aynı işlemleri üretir (işlem sayıları birebir).
+İndikatörler TradingView/TA-Lib ile doğrulandı (Supertrend, Pine kodunun
+çevirisiyle 3 coinde sıfır fark; MACD/Bollinger ~1e-12).
 
-| Filtre | Kural |
+**Testte işe yaramadığı görülen, bu yüzden EKLENMEYENLER:** günlük trend filtresi,
+ADX filtresi, kısmi kâr alma, MACD ile birleştirme, sabit 2R/3R hedef, stopu tam
+Supertrend çizgisine koymak (fitillerde gereksiz çıkış). "Daha çok indikatör daha
+iyi" değildir; burada her ek filtre sonucu düşürdü.
+
+### Giriş / çıkış şeması (`STRATEGY=supertrend`)
+
+| Adım | Kural |
 |---|---|
-| Fiyat sapması | Borsalar arası spot/perp sapması > %0.5 → veri anomalisi, işlem yok |
-| Çapraz doğrulama | En az 2 borsadan perp fiyatı gelmeli |
-| Funding (8s eşdeğerine normalize) | Ortalama > +%0.05 → long kalabalık, long yok; < −%0.05 → short yok |
-| Spot–perp bazı | > +%0.5 long'u, < −%0.5 short'u engeller |
-| Açık pozisyon (OI) değişimi | Bilgi amaçlı: fiyat ve OI aynı yönde → teyit; ters → kapanış hareketi |
+| **Giriş** | Supertrend(10, 3) yön **değiştirdiği** 2s mumun kapanışında, fiyat EMA200 ile aynı taraftaysa (long: üstünde). Piyasa emri. |
+| **Stop** | Borsada (sunucu tarafında): Supertrend çizgisi ∓ 1 ATR. %0.4–%6 aralığı dışındaysa işlem yok. |
+| **Stop takibi** | Her 2s kapanışta stop, yeni Supertrend çizgisi ∓ 1 ATR'ye taşınır — **yalnızca lehte**. |
+| **Çıkış** | 2s mum Supertrend'in ters tarafında kapanınca piyasa emriyle. Sabit hedef yok: kazanan koşar. |
+| **Yeniden giriş** | Pozisyonun kapandığı mumda aynı coinde yeni giriş yok (ters yöne anında dönme test edilmedi). |
+| **Filtreler** | Funding (±%0.05/8s), borsalar arası sapma, spot-perp bazı, en az 2 borsa doğrulaması. |
 
-### Çıkış
+İsabet oranı ~%34'tür: işlemlerin çoğu küçük kayıpla kapanır, kâr az sayıda büyük
+trendden gelir. 3–5 kayıp serisi **normaldir**.
 
-- **Stop:** 1.5 × ATR(14). %0.4'ten dar olamaz; %4'ten genişse işlem yapılmaz.
-- **Hedef:** 2R (stop mesafesinin 2 katı).
-- **Breakeven:** Fiyat 1R lehte gidince stop, giriş + komisyon seviyesine taşınır.
-- **Zaman stopu:** 24 mum (48 saat) içinde sonuç yoksa piyasa fiyatından kapanır.
-- Aynı anda **tek pozisyon**. Birden fazla sinyalde ADX'i en yüksek olan seçilir.
+`/analiz` her coin için "sonraki işlem tetiği"ni gösterir. Örneğin Supertrend şu an
+aşağıysa: 2s mum çizginin üstünde kapanırsa LONG, tahmini stop ve çıkış kuralıyla.
+
+Eski strateji `STRATEGY=pullback` ile seçilebilir (yalnızca karşılaştırma için).
 
 ---
 
@@ -123,36 +138,45 @@ nominal = RISK_PER_TRADE / (SL% + 2 × komisyon + kayma)
 nominal = min(nominal, MARGIN_USDT × LEVERAGE = 150 USDT, serbest bakiye × 5)
 ```
 
-**Örnek** — ETH 3000 USDT, ATR(2s) = %1.0:
+**Örnek** — XRP sinyali, stop %4.0 uzakta, risk 1.0 USDT:
 
 | Kalem | Değer |
 |---|---|
-| Stop mesafesi | 1.5 × %1.0 = **%1.5** → 2955 |
-| Hedef | 2R = %3.0 → 3090 |
-| Maliyet oranı | 1.5 + 2×0.06 + 0.05 = %1.67 |
-| Nominal | 1.5 / 0.0167 = **89.8 USDT** (150 tavanının altında) |
-| Kullanılan marjin | 89.8 / 5 = **18.0 USDT** (izole) |
-| Stopta kayıp | ≈ **1.50 USDT** (sermayenin %5'i) |
-| Hedefte kâr | ≈ 89.8 × (3% − 0.12%) ≈ **2.59 USDT** |
-| Tahmini likidasyon | 3000 × (1 − 1/5 + 0.005) ≈ 2415 (**%19.5 uzakta**, stop %1.5'te) |
+| Maliyet oranı | 4.0 + 2×0.06 + 0.05 = %4.17 |
+| Nominal | 1.0 / 0.0417 = **24 USDT** |
+| Kullanılan marjin | 24 / 5 = **4.8 USDT** (izole) → 3 pozisyon ≈ 15 USDT |
+| Stopta kayıp | ≈ **1.00 USDT** (sermayenin %3.3'ü) |
+| Tahmini likidasyon | girişten **%19.5 uzakta** (stop %4'te) |
+
+Supertrend stopları genişçe olduğu için (%2–6) nominaller küçüktür; 5x kaldıraç
+yalnızca marjini serbest bırakarak **3 pozisyonu aynı anda** taşımayı sağlar.
+
+### Portföy simülasyonu (4 yıl, 30 USDT başlangıç, Binance asgari tutarları ile)
+
+| Kurulum | 4 yıl: bitiş · maks. düşüş | Görülmemiş 1.4 yıl: bitiş · maks. düşüş |
+|---|---|---|
+| BTC/ETH/SOL, risk 1.5, tek pozisyon | 98.9 · %27 | 56.1 · %11 |
+| 10 coin, risk 1.5, tek pozisyon | **18.6 — 19 işlemde 20 USDT korumasına takıldı** | 79.7 · %12 |
+| 10 coin, risk 1.0, tek pozisyon | 92.5 · %33 | 64.4 · %11 |
+| **9 coin, risk 1.0, maks. 3 pozisyon (varsayılan)** | **133.0 · %25** | **83.7 · %19** |
+
+Sonuçlar: (1) risk 1.5 USDT, erken bir kayıp serisinde hesabı bitirebiliyor
+(yol bağımlılığı). (2) BTC bu sermayede hiç işlem göremiyor: Binance asgari
+pozisyonu 100 USDT, 1 USDT riskle ~%4 stopta pozisyon ~25 USDT. (3) Simülasyonda
+funding ödemeleri yoktur; günlük/seri kayıp korumaları uygulanmamıştır.
+**Geçmiş performans geleceği garanti etmez** — %19–25'lik düşüşler beklenmelidir.
 
 Korumalar:
 
-- Günlük zarar 4.5 USDT'ye ulaşınca UTC 00:00'a kadar yeni işlem yok.
-- Üst üste 3 kayıpta bot kendini duraklatır (`/devam`).
+- Günlük zarar 3 USDT'ye ulaşınca UTC 00:00'a kadar yeni işlem yok.
+- Üst üste 6 kayıpta bot kendini duraklatır (`/devam`).
 - Bakiye 20 USDT altına düşerse işlem açılmaz.
+- Aynı anda en fazla 3 pozisyon, aynı coinde tek pozisyon.
 - `MAX_SL_PCT`, 5x'teki likidasyon mesafesinin %70'inden büyükse bot **başlamaz**.
 
-> **"Her işlemde 30 × 5 = 150 USDT kullanmak istiyorum"** diyorsanız
-> `RISK_PER_TRADE_USDT`'yi yükseltin. Ancak örnekteki %1.5'lik stopta 150 USDT nominal
-> ≈ 2.5 USDT (sermayenin %8.3'ü) kayıptır; üst üste 4 stop sermayenin üçte birini
-> götürür. Önerilen değer 1–1.5 USDT'dir.
-
 > **Borsa asgari tutarları:** Bot, sembolün asgari nominal/miktar değerini borsadan
-> okur. Örneğin Binance BTCUSDT perpetual'da asgari nominal yüksektir (yazım
-> anında 100 USDT); 1.5 USDT riskle hesaplanan nominal bunun altında kalırsa sinyal
-> "risk kuralı" gerekçesiyle **reddedilir**, asla riski aşacak şekilde büyütülmez.
-> ETH ve SOL'de asgari tutarlar düşüktür.
+> okur. Hesaplanan nominal bunun altında kalırsa sinyal "risk kuralı" gerekçesiyle
+> **reddedilir**, asla riski aşacak şekilde büyütülmez.
 
 ---
 
@@ -269,6 +293,7 @@ sv-enable marginbot && sv up marginbot
 | Yeniden başlat | `sv restart marginbot` |
 | Canlı log | `tail -f $PREFIX/var/log/sv/marginbot/current` |
 | Ayrıntılı log | `tail -f data/logs/bot.log` |
+| `.env`'yi yeni sürüm ayarlarına taşı | `.venv/bin/python -m bot ayar-guncelle` (token, anahtar, mod korunur; yedek `.env.bak`) |
 | Güncelle | `bash termux/update.sh` |
 
 - **runit** botu çökerse otomatik yeniden başlatır. Hatalı `.env`'de saniyede bir
@@ -297,7 +322,8 @@ Android, arka plandaki uygulamaları agresif biçimde öldürür:
 | Komut | Açıklama |
 |---|---|
 | `/durum` | Mod, bakiye, açık pozisyon, risk korumaları, sonraki analiz zamanı |
-| `/analiz [ETH]` | Sembol(ler)i şimdi analiz eder: tüm kontroller ✅/▫️, 3 borsanın spot/perp/funding tablosu. Sinyal yoksa **tahmini işlem planı**: giriş bölgesi, stop, hedef, iptal seviyesi ve beklenen koşullar (işlem açmaz) |
+| `/analiz` | Tüm coinler tek mesajda: fiyat, trend yönü, **sonraki işlemin tetik seviyesi** (işlem açmaz) |
+| `/analiz ETH` | Tek coin ayrıntısı: kontroller ✅/▫️, 3 borsanın spot/perp/funding tablosu, **giriş / stop / çıkış şeması** |
 | `/backtest [ETH] [gün]` | Geçmiş veride test (varsayılan: tüm semboller, 365 gün; 30–1095). Borsanın gerçek asgari tutarlarıyla; isabet, kâr faktörü, maks. düşüş, long/short ayrımı, son işlemlerin giriş→çıkış fiyatları |
 | `/pozisyon` | Açık pozisyon, stop/hedef/likidasyon, gerçekleşmemiş K/Z |
 | `/kapat` | Açık pozisyonu piyasa fiyatından kapatır (onay düğmesiyle) |
@@ -363,7 +389,7 @@ uygulanmaz (canlı bot daha seçicidir). Funding ödemeleri dahil değildir.
 .venv/bin/python -m unittest discover -s tests -t . -v
 ```
 
-69 test (ağ gerektirmez):
+83 test (ağ gerektirmez):
 
 | Test | Kapsam |
 |---|---|
@@ -374,6 +400,7 @@ uygulanmaz (canlı bot daha seçicidir). Funding ödemeleri dahil değildir.
 | `test_execution` | LiveBroker: emir sırası, SL başarısızsa acil kapatma, cross marjin reddi, likidasyon kontrolü, stop taşıma sırası, yetim emir temizliği |
 | `test_ccxt_wire` | ccxt'nin her borsaya ürettiği **gerçek HTTP isteği** (endpoint + parametreler) |
 | `test_engine` | Uçtan uca: sinyal → onay → pozisyon → TP/SL/BE/zaman stopu → K/Z; yetkisiz sohbet; tekrar basma; seri kayıp koruması; bayat sinyal |
+| `test_supertrend` | Supertrend sinyali/planı, iz süren stopun yalnızca lehte taşınması, dönüşte çıkış, aynı mumda yeniden girişin engellenmesi, 3 pozisyon limiti, Pine referansıyla birebir Supertrend |
 | `test_data_backtest` | 1000 mumluk sayfalı veri çekimi, snapshot matematiği, backtest muhasebesi ve canlı analizle tutarlılık |
 
 > ccxt sürümünü yükseltmeden önce `test_ccxt_wire` mutlaka çalıştırılmalıdır
@@ -399,10 +426,15 @@ uygulanmaz (canlı bot daha seçicidir). Funding ödemeleri dahil değildir.
 
 ## Bilinen sınırlamalar
 
-- **Geliştirme ortamında borsa API'lerine ağ erişimi yoktu.** Bu nedenle canlı borsa
-  verisiyle backtest ve uçtan uca demo-hesap testi burada yapılamadı; emir
-  istekleri ccxt'nin HTTP katmanı yakalanarak doğrulandı. İlk kullanımda mutlaka
-  `python -m bot check` ve demo hesap aşamasını uygulayın.
+- **Strateji araştırması Binance'in herkese açık arşiv verisiyle yapıldı**
+  (`data.binance.vision`); geliştirme ortamından borsa API'lerine (emir) erişim
+  yoktu. Emir istekleri ccxt'nin HTTP katmanı yakalanarak doğrulandı. İlk canlı
+  kullanımda mutlaka `python -m bot check` ve demo hesap aşamasını uygulayın.
+- Araştırmadaki 10 coin bugün hâlâ listelenen büyük coinlerdir (hayatta kalma
+  yanlılığı); kripto coinleri birbiriyle güçlü korelasyonludur — 3 pozisyon
+  çoğu zaman aynı yönde riske girer.
+- Backtest ve simülasyonlarda funding ödemeleri yoktur; Supertrend işlemleri
+  ortalama 1–3 gün tutulduğundan gerçek sonuç biraz daha düşük olabilir.
 - Canlı K/Z, `FEE_RATE` ile **tahmini** komisyon içerir; funding ödemeleri dahil
   değildir. Kesin rakam için borsa geçmişine bakın.
 - Paper modda funding ödenmez, emir defteri derinliği modellenmez.

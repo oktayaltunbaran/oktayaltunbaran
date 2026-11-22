@@ -156,3 +156,111 @@ def adx(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], 
         prev = (prev * (n - 1) + dxs[k]) / n
         out[n + k] = prev
     return out
+
+
+def _rma(values: Sequence[Optional[float]], n: int) -> Series:
+    """Wilder RMA; None'lari atlayarak ilk n gecerli degerle tohumlar."""
+    out: Series = [None] * len(values)
+    buf: List[float] = []
+    prev: Optional[float] = None
+    for i, v in enumerate(values):
+        if v is None:
+            continue
+        if prev is None:
+            buf.append(v)
+            if len(buf) == n:
+                prev = sum(buf) / n
+                out[i] = prev
+        else:
+            prev = (prev * (n - 1) + v) / n
+            out[i] = prev
+    return out
+
+
+def macd(closes: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9):
+    """(macd, signal, histogram) — TradingView/TA-Lib klasik tanim."""
+    ef, es = ema(closes, fast), ema(closes, slow)
+    line: Series = [None if (a is None or b is None) else a - b for a, b in zip(ef, es)]
+    first = next((i for i, v in enumerate(line) if v is not None), None)
+    sig: Series = [None] * len(closes)
+    if first is not None:
+        s = ema([v for v in line[first:]], signal)  # type: ignore[misc]
+        sig[first:] = s
+    hist: Series = [None if (a is None or b is None) else a - b for a, b in zip(line, sig)]
+    return line, sig, hist
+
+
+def bollinger(closes: Sequence[float], n: int = 20, k: float = 2.0):
+    """(orta, ust, alt) — populasyon std (TradingView ile ayni)."""
+    mid = sma(closes, n)
+    up: Series = [None] * len(closes)
+    lo: Series = [None] * len(closes)
+    for i in range(n - 1, len(closes)):
+        w = closes[i - n + 1 : i + 1]
+        m = mid[i]
+        sd = (sum((x - m) ** 2 for x in w) / n) ** 0.5  # type: ignore[operator]
+        up[i] = m + k * sd  # type: ignore[operator]
+        lo[i] = m - k * sd  # type: ignore[operator]
+    return mid, up, lo
+
+
+def stoch_rsi(closes: Sequence[float], rsi_len: int = 14, stoch_len: int = 14, k: int = 3, d: int = 3):
+    """(%K, %D) 0..100."""
+    r = rsi(closes, rsi_len)
+    raw: Series = [None] * len(closes)
+    for i in range(len(closes)):
+        w = r[max(0, i - stoch_len + 1) : i + 1]
+        if len(w) < stoch_len or any(x is None for x in w):
+            continue
+        lo, hi = min(w), max(w)  # type: ignore[type-var]
+        raw[i] = 50.0 if hi == lo else (r[i] - lo) / (hi - lo) * 100  # type: ignore[operator]
+    def _sma_n(vals: Series, n: int) -> Series:
+        out: Series = [None] * len(vals)
+        for i in range(len(vals)):
+            w = vals[max(0, i - n + 1) : i + 1]
+            if len(w) == n and all(x is not None for x in w):
+                out[i] = sum(w) / n  # type: ignore[arg-type]
+        return out
+    kk = _sma_n(raw, k)
+    return kk, _sma_n(kk, d)
+
+
+def donchian(highs: Sequence[float], lows: Sequence[float], n: int = 20):
+    """(ust, alt): ONCEKI n mumun en yuksek/en dusugu (mevcut mum haric -> kirilim testi icin)."""
+    up: Series = [None] * len(highs)
+    lo: Series = [None] * len(highs)
+    for i in range(n, len(highs)):
+        up[i] = max(highs[i - n : i])
+        lo[i] = min(lows[i - n : i])
+    return up, lo
+
+
+def supertrend(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], n: int = 10, mult: float = 3.0):
+    """(cizgi, yon) — yon +1 yukari, -1 asagi. TradingView 'Supertrend' ile ayni mantik (ATR=RMA)."""
+    a = atr(highs, lows, closes, n)
+    line: Series = [None] * len(closes)
+    direction: List[Optional[int]] = [None] * len(closes)
+    fu = fl = None
+    fu_prev = fl_prev = 0.0
+    for i in range(len(closes)):
+        if a[i] is None:
+            continue
+        hl2 = (highs[i] + lows[i]) / 2
+        bu, bl = hl2 + mult * a[i], hl2 - mult * a[i]  # type: ignore[operator]
+        if fu is None:
+            fu, fl, dr = bu, bl, 1
+        else:
+            pc = closes[i - 1]
+            fu = bu if (bu < fu or pc > fu) else fu
+            fl = bl if (bl > fl or pc < fl) else fl
+            pd = direction[i - 1] or 1
+            if pd == -1 and closes[i] > fu_prev:
+                dr = 1
+            elif pd == 1 and closes[i] < fl_prev:
+                dr = -1
+            else:
+                dr = pd
+        fu_prev, fl_prev = fu, fl
+        direction[i] = dr
+        line[i] = fl if dr == 1 else fu
+    return line, direction

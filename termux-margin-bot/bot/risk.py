@@ -32,7 +32,7 @@ class SizePlan:
     contract_size: float
     entry: float
     sl: float
-    tp: float
+    tp: float  # 0 = sabit hedef yok
     notional: float
     margin: float
     loss_at_sl: float  # komisyon + kayma dahil tahmini kayip
@@ -67,8 +67,10 @@ def size_position(
 ) -> SizePlan:
     if entry <= 0 or sl <= 0 or contract_size <= 0:
         raise RiskReject("Gecersiz fiyat/kontrat verisi")
-    if (side == "long" and not sl < entry < tp) or (side == "short" and not tp < entry < sl):
-        raise RiskReject("SL/TP giris fiyatinin yanlis tarafinda")
+    if (side == "long" and not sl < entry) or (side == "short" and not entry < sl):
+        raise RiskReject("Stop giris fiyatinin yanlis tarafinda")
+    if tp > 0 and ((side == "long" and not tp > entry) or (side == "short" and not tp < entry)):
+        raise RiskReject("Hedef giris fiyatinin yanlis tarafinda")
 
     sl_frac = abs(entry - sl) / entry
     cost_frac = sl_frac + 2 * cfg.fee_rate + cfg.slippage_pct / 100

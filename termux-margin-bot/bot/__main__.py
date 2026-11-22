@@ -4,6 +4,7 @@
   python -m bot check        -> yapilandirma + borsa + Telegram baglanti testi
   python -m bot backtest ETH 365  -> geriye donuk test (sembol yoksa hepsi)
   python -m bot chatid       -> bota yazdiginiz mesajdan chat id'nizi gosterir
+  python -m bot ayar-guncelle -> .env'yi yeni sablona tasir (token/anahtar/mod korunur)
 """
 
 from __future__ import annotations
@@ -123,6 +124,49 @@ def cmd_chatid() -> int:
     return 1
 
 
+KEEP_KEYS = (
+    "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "MODE", "AUTO_TRADE", "EXEC_EXCHANGE", "USE_TESTNET",
+    "DATA_EXCHANGES", "DATA_DIR",
+    "BINANCE_API_KEY", "BINANCE_API_SECRET", "BYBIT_API_KEY", "BYBIT_API_SECRET",
+    "OKX_API_KEY", "OKX_API_SECRET", "OKX_API_PASSWORD",
+)
+
+
+def cmd_env_update() -> int:
+    """Mevcut .env'deki kimlik/mod degerlerini koruyup geri kalan her seyi yeni
+    .env.example'daki (test edilmis) varsayilanlara gunceller. Yedek: .env.bak"""
+    from pathlib import Path
+
+    from .config import parse_env_file
+
+    base = Path(__file__).resolve().parent.parent
+    env, example = base / ".env", base / ".env.example"
+    old = parse_env_file(env)
+    if not old:
+        print(".env bulunamadi veya bos.")
+        return 1
+    bak = base / ".env.bak"
+    bak.write_text(env.read_text(encoding="utf-8"), encoding="utf-8")
+    os.chmod(bak, 0o600)  # token/anahtar icerir
+    out = []
+    kept = []
+    for line in example.read_text(encoding="utf-8").splitlines():
+        key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
+        if key in KEEP_KEYS and key in old:
+            out.append(f"{key}={old[key]}")
+            if old[key]:
+                kept.append(key)
+        else:
+            out.append(line)
+    env.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.chmod(env, 0o600)
+    print("Korunan: " + ", ".join(kept))
+    print("Diger ayarlar yeni varsayilanlara guncellendi. Eski dosya: .env.bak")
+    load_settings()  # dogrula
+    print("Dogrulama OK.")
+    return 0
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -135,6 +179,8 @@ def main(argv=None) -> int:
             return cmd_backtest(rest)
         if sub == "chatid":
             return cmd_chatid()
+        if sub in ("ayar-guncelle", "env-update"):
+            return cmd_env_update()
         print(__doc__)
         return 2
     except ConfigError as e:

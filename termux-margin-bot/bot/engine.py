@@ -124,7 +124,7 @@ class Engine:
         price = entry if entry is not None else self.broker.last_price(symbol)
         d = 1 if side == "long" else -1
         sl = price - d * sl_dist
-        tp = price + d * sl_dist * self.cfg.tp_r_mult
+        tp = 0.0 if self.cfg.trailing else price + d * sl_dist * self.cfg.tp_r_mult
         try:
             free = self.broker.free_balance()
         except Exception as e:  # noqa: BLE001
@@ -146,6 +146,9 @@ class Engine:
             except Exception as e:  # noqa: BLE001
                 self.notify_error(f"analiz {sym}", e)
                 continue
+            for t in self.storage.open_trades():
+                if t.symbol == sym and t.mode == self.broker.mode and t.tp <= 0:
+                    self.manage_trailing(t, an)
             key = f"last_bar:{sym}"
             if self.storage.get(key) == an.bar_ts:
                 continue  # bu mum zaten islendi (yeniden baslatma vb.)
@@ -158,7 +161,11 @@ class Engine:
             )
             self.storage.log_signal(sym, an.signal.side if an.signal else None, "analyzed",
                                     {"blocks": an.blocks, "checks": an.checks, "fresh": fresh})
-            if an.signal and fresh:
+            if an.signal and fresh and self._closed_during(sym, an.bar_ts):
+                # Bu mumda kapanan pozisyonun ardindan ayni mumda yeniden giris yok
+                # (4 yillik testte "ters yone aninda donme" sinanmadi).
+                self.storage.log_signal(sym, an.signal.side, "skipped_just_closed")
+            elif an.signal and fresh:
                 cand.append((an, snap, oi))
             elif an.signal and not fresh:
                 log.info("%s sinyali bayat (mum %ss once kapandi), atlandi", sym, age // 1000)
@@ -167,23 +174,67 @@ class Engine:
             self.notify("🕑 <b>2s mum kapanisi</b>\n" + "\n".join(summary), silent=True)
         if not cand:
             return
-        if self.storage.open_trades():
-            for an, _, _ in cand:
-                self.storage.log_signal(an.symbol, an.signal.side, "skipped_open_position")
-            self.notify(
-                "ℹ️ Yeni sinyal(ler) var ancak acik pozisyon oldugu icin atlandi: "
-                + ", ".join(f"{esc(a.symbol)} {a.signal.side}" for a, _, _ in cand),
-                silent=True,
-            )
+        open_now = [t for t in self.storage.open_trades() if t.mode == self.broker.mode]
+        held = {t.symbol for t in open_now}
+        slots = self.cfg.max_open_positions - len(open_now)
+        cand = [x for x in cand if x[0].symbol not in held]  # ayni sembolde ikinci pozisyon yok
+        if slots <= 0 or not cand:
+            if cand:
+                for an, _, _ in cand:
+                    self.storage.log_signal(an.symbol, an.signal.side, "skipped_max_positions")
+                self.notify(
+                    f"ℹ️ Sinyal(ler) atlandi: acik pozisyon sayisi limitte ({self.cfg.max_open_positions}): "
+                    + ", ".join(f"{esc(a.symbol)} {a.signal.side}" for a, _, _ in cand),
+                    silent=True,
+                )
             return
         guard, _ = self.guards()
         if not guard.allowed:
             self.notify(f"⏸ Sinyal atlandi: {esc(guard.reason)}", silent=True)
             return
-        # Birden fazla sinyal: en guclu trend (ADX) tercih edilir; tek pozisyon kurali
+        # Bos yer kadar sinyal; once en guclu trend (ADX)
         cand.sort(key=lambda x: x[0].adx, reverse=True)
-        an, snap, oi = cand[0]
-        self.handle_signal(an, snap, oi)
+        for an, snap, oi in cand[:slots]:
+            self.handle_signal(an, snap, oi)
+
+    def _closed_during(self, symbol: str, bar_open_ms: int) -> bool:
+        return any(t.symbol == symbol for t in self.storage.closed_trades(bar_open_ms, mode=self.broker.mode))
+
+    def manage_trailing(self, t: Trade, an: Analysis) -> None:
+        """Supertrend islemi: her yeni 2s kapanista
+        1) Supertrend ters yone dondu -> piyasa emriyle cik
+        2) aksi halde borsadaki felaket stopunu (ST cizgisi -/+ k*ATR) yalnizca LEHTE tasi."""
+        if an.st_dir is None or an.st_line is None or an.bar_ts <= t.opened_bar_ts:
+            return
+        if t.meta.get("managed_bar") == an.bar_ts:
+            return
+        t.meta["managed_bar"] = an.bar_ts
+        if an.st_dir != t.direction:
+            try:
+                st = self.broker.close_position(t)
+                self.finalize(t, st.exit_price, "ST-DONUS")
+            except Exception as e:  # noqa: BLE001
+                self.notify_error("supertrend cikisi", e)
+                self.storage.update_trade(t)
+            return
+        new_sl = self.strategy.st_stop(an.st_line, an.atr, t.side)
+        if t.direction * (new_sl - t.sl) <= 0:
+            self.storage.update_trade(t)
+            return
+        try:
+            price = self.broker.last_price(t.symbol)
+            if (t.side == "long" and new_sl >= price) or (t.side == "short" and new_sl <= price):
+                self.storage.update_trade(t)
+                return  # fiyat zaten stopun otesinde; borsa stopu/kapanis halleder
+            t.sl_order_id = self.broker.move_stop(t, new_sl)
+            old = t.sl
+            t.sl = new_sl
+            self.storage.update_trade(t)
+            self.notify(f"🔁 {esc(t.symbol)} iz suren stop: <code>{fmt.px(old)}</code> → <code>{fmt.px(new_sl)}</code>",
+                        silent=True)
+        except Exception as e:  # noqa: BLE001
+            self.storage.update_trade(t)
+            self.notify_error("stop tasima", e)
 
     def handle_signal(self, an: Analysis, snap, oi) -> None:
         s = an.signal
@@ -216,8 +267,12 @@ class Engine:
     def execute(self, an: Analysis) -> Optional[Trade]:
         s = an.signal
         assert s is not None
-        if self.storage.open_trades():
-            self.notify("⛔ Zaten acik pozisyon var; yeni islem acilmadi.")
+        open_now = [t for t in self.storage.open_trades() if t.mode == self.broker.mode]
+        if any(t.symbol == s.symbol for t in open_now):
+            self.notify(f"⛔ {esc(s.symbol)} icin zaten acik pozisyon var; yeni islem acilmadi.")
+            return None
+        if len(open_now) >= self.cfg.max_open_positions:
+            self.notify(f"⛔ Acik pozisyon limiti dolu ({self.cfg.max_open_positions}); islem acilmadi.")
             return None
         guard, _ = self.guards()
         if not guard.allowed:
@@ -232,7 +287,8 @@ class Engine:
             if drift_r < -0.5:
                 raise RiskReject(f"Fiyat sinyalden bu yana aleyhte {drift_r:.2f}R gitti; kurulum bozuldu")
             plan = self.plan_for(s.symbol, s.side, s.sl_dist, entry=price)
-            res = self.broker.open_position(s.symbol, s.side, plan, s.sl_dist, s.sl_dist * self.cfg.tp_r_mult)
+            tp_dist = 0.0 if self.cfg.trailing else s.sl_dist * self.cfg.tp_r_mult
+            res = self.broker.open_position(s.symbol, s.side, plan, s.sl_dist, tp_dist)
         except RiskReject as e:
             self.notify(f"⛔ Islem acilmadi: {esc(e)}")
             return None
@@ -264,7 +320,8 @@ class Engine:
             liq_price=res.get("liq"),
             sl_order_id=res.get("sl_order_id"),
             tp_order_id=res.get("tp_order_id"),
-            meta={"signal_close": s.entry_ref, "atr": s.atr, "adx": an.adx, "rsi": an.rsi},
+            meta={"signal_close": s.entry_ref, "atr": s.atr, "adx": an.adx, "rsi": an.rsi,
+                  "strategy": self.cfg.strategy},
         )
         self.storage.insert_trade(t)
         self.storage.log_signal(s.symbol, s.side, "opened", {"trade_id": t.id})
@@ -283,6 +340,9 @@ class Engine:
                 continue
             if not st.open:
                 self.finalize(t, st.exit_price, st.exit_reason or "?")
+                continue
+            if t.tp <= 0:  # iz suren (supertrend) islem: stop/cikis mum kapanisinda yonetilir
+                self.storage.update_trade(t)
                 continue
             # Breakeven: fiyat +BREAKEVEN_AT_R lehte gidince stop giris(+komisyon)'a
             if self.cfg.breakeven_at_r > 0 and not t.breakeven_done and st.mark:
@@ -415,6 +475,18 @@ class Engine:
         self.notify("\n".join(lines))
 
     def cmd_analiz(self, args):
+        if not args and len(self.cfg.symbols) > 2:
+            rows = []
+            for sym in self.cfg.symbols:
+                try:
+                    raw = self.md.ohlcv(self.cfg.exec_exchange, sym, self.cfg.timeframe,
+                                        limit=max(1000, self.strategy.min_bars + 10))
+                    rows.append(self.strategy.analyze(sym, closed_candles(raw, self.cfg.timeframe_ms), None, None,
+                                                      require_market=False))
+                except Exception as e:  # noqa: BLE001
+                    log.warning("ozet %s: %s", sym, e)
+            self.notify(fmt.summary_text(rows, self.cfg.timeframe))
+            return
         syms = [a.upper() if "/" in a else f"{a.upper()}/USDT" for a in args] or self.cfg.symbols
         for sym in syms:
             try:
@@ -437,7 +509,8 @@ class Engine:
             self.notify("\n".join([
                 f"{fmt.side_label(t.side)} <b>{esc(t.symbol)}</b> · {esc(t.mode)}",
                 f"Giris {fmt.px(t.entry_price)} · Simdi {fmt.px(mark)}",
-                f"Stop {fmt.px(t.sl)}{' (BE)' if t.breakeven_done else ''} · Hedef {fmt.px(t.tp)} · Liq {fmt.px(t.liq_price)}",
+                f"Stop {fmt.px(t.sl)}{' (BE)' if t.breakeven_done else ''} · "
+                + (f"Hedef {fmt.px(t.tp)}" if t.tp > 0 else "Cikis: Supertrend donusu") + f" · Liq {fmt.px(t.liq_price)}",
                 f"Gerceklesmemis K/Z: <b>{fmt.usd(upnl)} USDT</b> (komisyon haric)",
                 f"Acilis {fmt.ts_str(t.opened_at)}",
             ]))
@@ -509,9 +582,12 @@ class Engine:
             f"Marjin {c.margin_usdt:g} USDT · Kaldirac {c.leverage}x · Max nominal {c.max_notional_usdt:g}",
             f"Islem basi risk {c.risk_per_trade_usdt:g} · Gunluk max kayip {c.max_daily_loss_usdt:g}",
             f"Ust uste kayip limiti {c.max_consecutive_losses} · Min bakiye {c.min_equity_usdt:g}",
-            f"SL {c.atr_sl_mult:g}×ATR (%{c.min_sl_pct:g}–%{c.max_sl_pct:g}) · TP {c.tp_r_mult:g}R · BE {c.breakeven_at_r:g}R",
-            f"EMA {c.ema_fast}/{c.ema_mid}/{c.ema_slow} · ADX≥{c.adx_min:g} · Funding limit %{c.funding_limit * 100:g}",
-            f"Maks. tutma {c.max_hold_candles} mum",
+            f"Strateji: <b>{c.strategy}</b>",
+            (f"Supertrend({c.st_len},{c.st_mult:g}) + EMA{c.ema_slow} · stop ST∓{c.st_stop_atr:g}ATR "
+             f"(%{c.min_sl_pct:g}–%{c.max_sl_pct:g}) · cikis: ST donusu" if c.trailing else
+             f"SL {c.atr_sl_mult:g}×ATR (%{c.min_sl_pct:g}–%{c.max_sl_pct:g}) · TP {c.tp_r_mult:g}R · "
+             f"BE {c.breakeven_at_r:g}R · maks. {c.max_hold_candles} mum"),
+            f"Funding limit %{c.funding_limit * 100:g}",
         ]))
 
     # ------------------------------------------------------------ lifecycle

@@ -80,7 +80,7 @@ def analysis_text(an: Analysis, snap: Optional[MarketSnapshot], oi_change: Optio
         sg = an.signal
         lines.append(f"\n<b>Sonuc:</b> {side_label(sg.side)} SINYALI")
         lines.append(f"Giris <code>{px(sg.entry_ref)}</code> · Stop <code>{px(sg.sl)}</code> · "
-                     f"Hedef <code>{px(sg.tp)}</code>")
+                     + (f"Hedef <code>{px(sg.tp)}</code>" if sg.tp > 0 else "Cikis: Supertrend donusu"))
     elif an.plan:
         lines.append("")
         lines += plan_block(an.plan)
@@ -90,6 +90,8 @@ def analysis_text(an: Analysis, snap: Optional[MarketSnapshot], oi_change: Optio
 
 
 def plan_block(pl) -> list:
+    if pl.trigger is not None:
+        return st_plan_block(pl)
     d = 1 if pl.side == "long" else -1
     sl_pct = (pl.sl - pl.entry) / pl.entry * 100
     tp_pct = (pl.tp - pl.entry) / pl.entry * 100
@@ -117,19 +119,27 @@ def signal_text(
     s = an.signal
     assert s is not None
     sl_pct = (plan.sl - plan.entry) / plan.entry * 100
-    tp_pct = (plan.tp - plan.entry) / plan.entry * 100
+    tp_pct = (plan.tp - plan.entry) / plan.entry * 100 if plan.tp > 0 else 0.0
     lines = [
         f"{side_label(s.side)} · <b>{esc(s.symbol)}</b> · {cfg.timeframe}",
         f"<i>{esc(broker_name)}</i>",
         "",
         f"Giris  <code>{px(plan.entry)}</code>",
         f"Stop   <code>{px(plan.sl)}</code>  ({pct(sl_pct)})",
-        f"Hedef  <code>{px(plan.tp)}</code>  ({pct(tp_pct)})  R:R 1:{cfg.tp_r_mult:g}",
+    ]
+    if plan.tp > 0:
+        lines.append(f"Hedef  <code>{px(plan.tp)}</code>  ({pct(tp_pct)})  R:R 1:{cfg.tp_r_mult:g}")
+    else:
+        lines += [
+            "Stop takibi: her 2s kapanista Supertrend cizgisine (lehte) tasinir",
+            "Cikis  : 2s mum Supertrend'in ters tarafinda kapaninca",
+        ]
+    lines += [
         f"Likid. ≈ <code>{px(plan.liq_est)}</code>",
         "",
         f"Nominal {plan.notional:.2f} USDT · Marjin {plan.margin:.2f} USDT ({cfg.leverage}x izole)",
-        f"Stopta kayip ≈ <b>{plan.loss_at_sl:.2f} USDT</b> · Hedefte kar ≈ "
-        f"{plan.notional * (abs(tp_pct) / 100 - 2 * cfg.fee_rate):.2f} USDT",
+        f"Stopta kayip ≈ <b>{plan.loss_at_sl:.2f} USDT</b>"
+        + (f" · Hedefte kar ≈ {plan.notional * (abs(tp_pct) / 100 - 2 * cfg.fee_rate):.2f} USDT" if plan.tp > 0 else ""),
     ]
     if plan.capped_by_leverage:
         lines.append("<i>Nominal, kaldirac/bakiye tavanina gore sinirlandi.</i>")
@@ -151,9 +161,10 @@ def trade_open_text(t: Trade, broker_name: str) -> str:
             f"✅ <b>Pozisyon acildi</b> · {side_label(t.side)} {esc(t.symbol)}",
             f"<i>{esc(broker_name)}</i>",
             f"Giris <code>{px(t.entry_price)}</code> · Miktar {t.base_qty:g}",
-            f"Stop <code>{px(t.sl)}</code> · Hedef <code>{px(t.tp)}</code>",
+            f"Stop <code>{px(t.sl)}</code> · "
+            + (f"Hedef <code>{px(t.tp)}</code>" if t.tp > 0 else "Cikis: Supertrend donusu (iz suren stop)"),
             f"Likid. <code>{px(t.liq_price)}</code> · Nominal {t.notional_usdt:.2f} USDT",
-            "Stop ve hedef borsada (sunucu tarafli) tanimli.",
+            "Stop borsada (sunucu tarafli) tanimli.",
         ]
     )
 
@@ -200,3 +211,57 @@ def stats_text(trades: Iterable[Trade], title: str) -> str:
             f"Maks. dusus {mdd:.2f} USDT",
         ]
     )
+
+
+def st_plan_block(pl) -> list:
+    """Supertrend: bir sonraki islemin giris/cikis semasi."""
+    long_ = pl.side == "long"
+    cur = {"long": "🟢 YUKARI", "short": "🔴 ASAGI"}.get(pl.current_trend or "", "—")
+    where = "ustunde" if long_ else "altinda"
+    sl_pct = (pl.sl - pl.trigger) / pl.trigger * 100
+    lines = [
+        "📍 <b>Giris / cikis semasi</b>",
+        f"Simdiki trend: {cur} (bu yondeki giris firsati, donus aninda verilmisti)",
+        "",
+        f"<b>Sonraki islem:</b> {side_label(pl.side)}",
+        f"Tetik  : 2s mum <code>{px(pl.trigger)}</code> {where} kapanirsa "
+        f"(fiyattan %{abs(pl.distance_pct):.2f} uzakta)",
+        "Giris  : tetik mumunun kapanisi (piyasa emri)",
+        f"Stop   : ≈ <code>{px(pl.sl)}</code> ({pct(sl_pct)}) · borsada durur",
+        "Stop takibi: her 2s kapanista yeni Supertrend cizgisine (yalnizca lehte) tasinir",
+        "Cikis  : 2s mum Supertrend'in ters tarafinda kapaninca (sabit hedef yok, kazanan kosar)",
+    ]
+    if pl.waiting_for:
+        lines.append("Ek sart: " + "; ".join(esc(w) for w in pl.waiting_for))
+    lines.append("<i>Seviyeler tahminidir; kesin degerler tetik mumunun kapanisinda hesaplanir.</i>")
+    return lines
+
+
+def summary_text(rows, tf: str) -> str:
+    """/analiz (argumansiz): tum semboller tek mesajda."""
+    lines = [f"{'Coin':<5}{'Fiyat':>10}  Trend  Sonraki islem tetigi"]
+    sig = []
+    for an in rows:
+        base = an.symbol.split("/")[0][:5]
+        trend = {"long": "▲", "short": "▼"}.get(an.bias, "–")
+        if an.signal:
+            nxt = f"SINYAL {an.signal.side.upper()}"
+            sig.append(an.symbol)
+        elif an.plan and an.plan.trigger is not None:
+            pl = an.plan
+            op = ">" if pl.side == "long" else "<"
+            nxt = f"{pl.side.upper():<5} {op} {px(pl.trigger)} ({pl.distance_pct:+.1f}%)"
+            if pl.waiting_for:
+                nxt += " *"
+        elif an.plan:
+            nxt = f"{an.plan.side.upper()} bolge {px(an.plan.entry)}"
+        else:
+            nxt = "-"
+        lines.append(f"{base:<5}{px(an.close):>10}  {trend:^5}  {nxt}")
+    out = [f"🧭 <b>Piyasa ozeti</b> · {tf} · son kapanan mum", f"<pre>{esc(chr(10).join(lines))}</pre>"]
+    out.append("Tetik: 2s mum bu seviyenin otesinde kapanirsa giris. "
+               "<i>* = ek sart var (EMA200/filtre)</i>")
+    if sig:
+        out.append("🔔 Sinyal: " + ", ".join(esc(x) for x in sig))
+    out.append("Ayrinti ve giris/cikis semasi: <code>/analiz ETH</code>")
+    return "\n".join(out)

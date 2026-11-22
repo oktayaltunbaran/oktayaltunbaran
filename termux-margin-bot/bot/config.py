@@ -83,7 +83,10 @@ class Settings:
     exec_exchange: str = "binance"
     data_exchanges: List[str] = field(default_factory=lambda: list(SUPPORTED_EXCHANGES))
     use_testnet: bool = False
-    symbols: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+    symbols: List[str] = field(default_factory=lambda: [
+        "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
+        "ADA/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT",
+    ])
     timeframe: str = "2h"
     candle_close_delay_sec: int = 20
     confirm_timeout_min: int = 15
@@ -92,9 +95,10 @@ class Settings:
     # Sermaye ve risk
     margin_usdt: float = 30.0
     leverage: int = 5
-    risk_per_trade_usdt: float = 1.5
-    max_daily_loss_usdt: float = 4.5
-    max_consecutive_losses: int = 3
+    risk_per_trade_usdt: float = 1.0
+    max_open_positions: int = 3
+    max_daily_loss_usdt: float = 3.0
+    max_consecutive_losses: int = 6
     min_equity_usdt: float = 20.0
     paper_start_equity: float = 30.0
     require_isolated: bool = True
@@ -102,7 +106,11 @@ class Settings:
     slippage_pct: float = 0.05  # yuzde
     maint_margin_rate: float = 0.005
 
-    # Strateji
+    # Strateji: "supertrend" (varsayilan, 4 yillik testte secildi) | "pullback" (eski)
+    strategy: str = "supertrend"
+    st_len: int = 10
+    st_mult: float = 3.0
+    st_stop_atr: float = 1.0  # borsadaki felaket stopu = Supertrend cizgisi -/+ bu kadar ATR
     ema_fast: int = 21
     ema_mid: int = 50
     ema_slow: int = 200
@@ -119,7 +127,7 @@ class Settings:
     breakeven_at_r: float = 1.0  # 0 = kapali
     max_hold_candles: int = 24
     min_sl_pct: float = 0.4
-    max_sl_pct: float = 4.0
+    max_sl_pct: float = 6.0
     funding_limit: float = 0.0005  # 8 saatlik esdegerde %0.05
     max_price_divergence_pct: float = 0.5
     max_basis_pct: float = 0.5
@@ -143,6 +151,11 @@ class Settings:
         return self.margin_usdt * self.leverage
 
     @property
+    def trailing(self) -> bool:
+        """True: sabit hedef (TP) yok; cikis Supertrend donusu + iz suren stop."""
+        return self.strategy == "supertrend"
+
+    @property
     def is_live(self) -> bool:
         return self.mode == "live"
 
@@ -163,6 +176,10 @@ class Settings:
             errs.append("EXEC_EXCHANGE, DATA_EXCHANGES listesinde olmali")
         if len(self.data_exchanges) < 2:
             errs.append("Capraz dogrulama icin DATA_EXCHANGES en az 2 borsa icermeli")
+        if self.strategy not in ("supertrend", "pullback"):
+            errs.append("STRATEGY supertrend veya pullback olmali")
+        if self.st_len < 2 or self.st_mult <= 0 or self.st_stop_atr < 0:
+            errs.append("ST_LEN >= 2, ST_MULT > 0, ST_STOP_ATR >= 0 olmali")
         if self.timeframe not in TIMEFRAME_MS:
             errs.append(f"TIMEFRAME {list(TIMEFRAME_MS)} icinden olmali")
         if not self.symbols:
@@ -178,6 +195,8 @@ class Settings:
             errs.append("RISK_PER_TRADE_USDT > 0 olmali")
         if self.risk_per_trade_usdt > self.margin_usdt:
             errs.append("RISK_PER_TRADE_USDT, MARGIN_USDT'den buyuk olamaz")
+        if not (1 <= self.max_open_positions <= 5):
+            errs.append("MAX_OPEN_POSITIONS 1..5 olmali")
         if self.max_daily_loss_usdt < self.risk_per_trade_usdt:
             errs.append("MAX_DAILY_LOSS_USDT en az RISK_PER_TRADE_USDT kadar olmali")
         if not (0 < self.min_sl_pct < self.max_sl_pct):
@@ -229,10 +248,13 @@ _FLOAT_FIELDS = {
     "FUNDING_LIMIT": "funding_limit",
     "MAX_PRICE_DIVERGENCE_PCT": "max_price_divergence_pct",
     "MAX_BASIS_PCT": "max_basis_pct",
+    "ST_MULT": "st_mult",
+    "ST_STOP_ATR": "st_stop_atr",
 }
 _INT_FIELDS = {
     "LEVERAGE": "leverage",
     "MAX_CONSECUTIVE_LOSSES": "max_consecutive_losses",
+    "MAX_OPEN_POSITIONS": "max_open_positions",
     "CANDLE_CLOSE_DELAY_SEC": "candle_close_delay_sec",
     "CONFIRM_TIMEOUT_MIN": "confirm_timeout_min",
     "EMA_FAST": "ema_fast",
@@ -243,6 +265,7 @@ _INT_FIELDS = {
     "ADX_LEN": "adx_len",
     "MAX_HOLD_CANDLES": "max_hold_candles",
     "MONITOR_INTERVAL_SEC": "monitor_interval_sec",
+    "ST_LEN": "st_len",
 }
 _BOOL_FIELDS = {
     "AUTO_TRADE": "auto_trade",
@@ -266,6 +289,7 @@ def load_settings(env_path: Optional[Path] = None, validate: bool = True) -> Set
         s.mode = raw.get("MODE", s.mode).strip().lower()
         s.exec_exchange = raw.get("EXEC_EXCHANGE", s.exec_exchange).strip().lower()
         s.timeframe = raw.get("TIMEFRAME", s.timeframe).strip()
+        s.strategy = raw.get("STRATEGY", s.strategy).strip().lower()
         if raw.get("DATA_EXCHANGES"):
             s.data_exchanges = [x.strip().lower() for x in raw["DATA_EXCHANGES"].split(",") if x.strip()]
         if raw.get("SYMBOLS"):
@@ -298,7 +322,7 @@ def load_settings(env_path: Optional[Path] = None, validate: bool = True) -> Set
 
 def _known_keys() -> set:
     keys = set(_FLOAT_FIELDS) | set(_INT_FIELDS) | set(_BOOL_FIELDS)
-    keys |= {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "MODE", "EXEC_EXCHANGE", "TIMEFRAME", "SYMBOLS", "DATA_DIR", "DATA_EXCHANGES"}
+    keys |= {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "MODE", "EXEC_EXCHANGE", "TIMEFRAME", "SYMBOLS", "DATA_DIR", "DATA_EXCHANGES", "STRATEGY"}
     for ex in SUPPORTED_EXCHANGES:
         p = ex.upper()
         keys |= {f"{p}_API_KEY", f"{p}_API_SECRET", f"{p}_API_PASSWORD"}
