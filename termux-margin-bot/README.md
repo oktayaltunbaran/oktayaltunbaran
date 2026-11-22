@@ -297,7 +297,8 @@ Android, arka plandaki uygulamaları agresif biçimde öldürür:
 | Komut | Açıklama |
 |---|---|
 | `/durum` | Mod, bakiye, açık pozisyon, risk korumaları, sonraki analiz zamanı |
-| `/analiz [ETH]` | Sembol(ler)i şimdi analiz eder: tüm kontroller ✅/▫️, 3 borsanın spot/perp/funding tablosu (işlem açmaz) |
+| `/analiz [ETH]` | Sembol(ler)i şimdi analiz eder: tüm kontroller ✅/▫️, 3 borsanın spot/perp/funding tablosu. Sinyal yoksa **tahmini işlem planı**: giriş bölgesi, stop, hedef, iptal seviyesi ve beklenen koşullar (işlem açmaz) |
+| `/backtest [ETH] [gün]` | Geçmiş veride test (varsayılan: tüm semboller, 365 gün; 30–1095). Borsanın gerçek asgari tutarlarıyla; isabet, kâr faktörü, maks. düşüş, long/short ayrımı, son işlemlerin giriş→çıkış fiyatları |
 | `/pozisyon` | Açık pozisyon, stop/hedef/likidasyon, gerçekleşmemiş K/Z |
 | `/kapat` | Açık pozisyonu piyasa fiyatından kapatır (onay düğmesiyle) |
 | `/rapor` | Son 7 gün ve tüm zamanlar: isabet, net K/Z, kâr faktörü, maks. düşüş |
@@ -325,10 +326,26 @@ Her aşamada önce `.venv/bin/python -m bot check` çalıştırın.
 
 ## Backtest
 
+Telegram'dan: `/backtest` (tüm semboller, 365 gün) veya `/backtest ETH 730`.
+Termux'tan:
+
 ```bash
-.venv/bin/python -m bot backtest ETH/USDT 365
-.venv/bin/python -m bot backtest SOL/USDT 730
+.venv/bin/python -m bot backtest ETH 365
+.venv/bin/python -m bot backtest          # tüm semboller
 ```
+
+Rapor nasıl okunur:
+
+| Satır | Anlamı | Kabaca iyi |
+|---|---|---|
+| Kar fakt. | Toplam kazanç / toplam kayıp | > 1.3 |
+| Isabet | Kazanan işlem oranı (2R hedefte %35–45 normaldir) | > %35 |
+| Maks. dusus | Zirveden en büyük sermaye düşüşü | < %25 |
+| Acilamayan sinyal | Borsa asgari tutarı riskinize göre yüksek (örn. BTC) | düşük |
+| Al-tut | Aynı dönemde sadece fiyat değişimi (karşılaştırma için) | — |
+
+Tek bir sembol/dönemde iyi görünen sonuç yeterli değildir: en az 3 sembol ve
+1–2 yıl test edin, sonuçlar tutarlıysa paper modda gerçek zamanlı doğrulayın.
 
 Varsayımlar **bilerek kötümser**: giriş sinyalden sonraki mumun açılışından + kayma;
 aynı mumda hem SL hem TP'ye değildiyse SL sayılır; breakeven bir sonraki mumdan
@@ -346,7 +363,7 @@ uygulanmaz (canlı bot daha seçicidir). Funding ödemeleri dahil değildir.
 .venv/bin/python -m unittest discover -s tests -t . -v
 ```
 
-63 test (ağ gerektirmez):
+69 test (ağ gerektirmez):
 
 | Test | Kapsam |
 |---|---|

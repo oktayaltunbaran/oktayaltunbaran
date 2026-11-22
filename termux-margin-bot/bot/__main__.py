@@ -2,7 +2,7 @@
 
   python -m bot              -> botu calistir
   python -m bot check        -> yapilandirma + borsa + Telegram baglanti testi
-  python -m bot backtest BTC/USDT 365   -> teknik kurallarin geriye donuk testi
+  python -m bot backtest ETH 365  -> geriye donuk test (sembol yoksa hepsi)
   python -m bot chatid       -> bota yazdiginiz mesajdan chat id'nizi gosterir
 """
 
@@ -90,18 +90,17 @@ def cmd_check() -> int:
 
 def cmd_backtest(args) -> int:
     cfg = load_settings(validate=False)
-    sym = args[0].upper() if args else "BTC/USDT"
-    days = int(args[1]) if len(args) > 1 else 365
-    from .backtest import fetch_history, run_backtest, summarize
-    from .exchanges import make_client, perp_symbol
+    syms = [a.upper() if "/" in a else f"{a.upper()}/USDT" for a in args if not a.isdigit()] or cfg.symbols
+    days = next((int(a) for a in args if a.isdigit()), 365)
+    from .backtest import backtest_symbol
+    from .exchanges import make_client
 
     ex = make_client(cfg.exec_exchange, "swap")
     ex.load_markets()
-    print(f"{cfg.exec_exchange} {perp_symbol(sym)} {cfg.timeframe} {days} gun indiriliyor...")
-    candles = fetch_history(ex, perp_symbol(sym), cfg.timeframe, days)
-    print(f"{len(candles)} mum.")
-    trades, end = run_backtest(cfg, candles, sym)
-    print(summarize(trades, cfg.paper_start_equity, end))
+    for sym in syms:
+        print(f"... {cfg.exec_exchange} {sym} {cfg.timeframe} {days} gun")
+        print("\n".join(backtest_symbol(cfg, ex, sym, days)))
+        print()
     return 0
 
 

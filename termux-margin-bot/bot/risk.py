@@ -85,7 +85,10 @@ def size_position(
             capped = True
 
     raw_qty = notional_target / (entry * contract_size)
-    qty = float(amount_to_precision(raw_qty))  # ccxt: TRUNCATE (asagi yuvarlar)
+    try:
+        qty = float(amount_to_precision(raw_qty))  # ccxt: TRUNCATE (asagi yuvarlar)
+    except Exception:  # noqa: BLE001  ccxt sifira yuvarlaninca InvalidOrder firlatir
+        qty = 0.0
     if qty <= 0 or math.isnan(qty):
         raise RiskReject(
             f"Hesaplanan miktar borsanin hassasiyetine gore 0'a yuvarlandi (nominal {notional_target:.2f} USDT)"

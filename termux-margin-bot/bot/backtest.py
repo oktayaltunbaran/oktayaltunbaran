@@ -14,7 +14,8 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Callable, List, Optional
 
 from .config import Settings
 from .risk import RiskReject, realized_pnl, size_position
@@ -57,7 +58,27 @@ def fetch_history(ex, symbol: str, timeframe: str, days: int) -> List[List[float
     return [c for c in out if c[0] + tf_ms <= now]
 
 
-def run_backtest(cfg: Settings, candles: List[List[float]], symbol: str = "SYM"):
+@dataclass
+class BTResult:
+    trades: List[BTTrade]
+    end_equity: float
+    rejected: int  # risk/asgari tutar nedeniyle acilamayan sinyal sayisi
+    candles: List[List[float]]
+
+
+def run_backtest(
+    cfg: Settings,
+    candles: List[List[float]],
+    symbol: str = "SYM",
+    contract_size: float = 1.0,
+    amount_to_precision: Optional[Callable[[float], float]] = None,
+    min_amount: Optional[float] = None,
+    min_cost: Optional[float] = 5.0,
+) -> BTResult:
+    """Borsanin gercek kontrat buyuklugu / hassasiyet / asgari tutarlari
+    verilirse canlidaki gibi boyutlandirir (or. BTC'de 100 USDT asgari)."""
+    a2p = amount_to_precision or (lambda x: math.floor(x * 1e5) / 1e5)
+    rejected = 0
     strat = Strategy(cfg)
     ind = strat.compute(candles)  # tek seferde, nedensel
     equity = cfg.paper_start_equity
@@ -84,12 +105,12 @@ def run_backtest(cfg: Settings, candles: List[List[float]], symbol: str = "SYM")
             sl = entry - d * s.sl_dist
             tp = entry + d * s.sl_dist * cfg.tp_r_mult
             try:
-                plan = size_position(cfg, s.side, entry, sl, tp, 1.0, lambda x: math.floor(x * 1e5) / 1e5,
-                                     None, 5.0, equity)
+                plan = size_position(cfg, s.side, entry, sl, tp, contract_size, a2p, min_amount, min_cost, equity)
             except RiskReject:
+                rejected += 1
                 i += 1
                 continue
-            pos = BTTrade(s.side, nxt[0], entry, sl, tp, plan.qty, r=s.sl_dist)
+            pos = BTTrade(s.side, nxt[0], entry, sl, tp, plan.base_qty, r=s.sl_dist)
             be_armed = False
             be_pending = False
             entry_idx = i + 1
@@ -128,28 +149,106 @@ def run_backtest(cfg: Settings, candles: List[List[float]], symbol: str = "SYM")
             trades.append(pos)
             pos = None
         i += 1
-    return trades, equity
+    return BTResult(trades, equity, rejected, candles)
 
 
-def summarize(trades: List[BTTrade], start_equity: float, end_equity: float) -> str:
-    if not trades:
-        return "Islem yok."
+def _stats(trades: List[BTTrade], start_equity: float) -> dict:
     pnls = [t.pnl for t in trades]
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
     gl = -sum(losses)
-    pf = sum(wins) / gl if gl > 0 else float("inf")
     eq, peak, mdd = start_equity, start_equity, 0.0
     for p in pnls:
         eq += p
         peak = max(peak, eq)
         mdd = max(mdd, (peak - eq) / peak * 100)
-    by = {}
-    for t in trades:
+    return {
+        "n": len(trades),
+        "win": len(wins) / len(trades) * 100 if trades else 0.0,
+        "pf": (sum(wins) / gl) if gl > 0 else float("inf"),
+        "net": sum(pnls),
+        "mdd": mdd,
+        "avg_win": sum(wins) / len(wins) if wins else 0.0,
+        "avg_loss": sum(losses) / len(losses) if losses else 0.0,
+    }
+
+
+def _d(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%d.%m.%y")
+
+
+def report_lines(res: BTResult, start_equity: float, symbol: str, timeframe: str, last_n: int = 5) -> List[str]:
+    """Duz metin rapor satirlari (Telegram'da <pre> icinde gosterilir)."""
+    c = res.candles
+    if not c:
+        return [f"{symbol}: veri yok"]
+    days = (c[-1][0] - c[0][0]) / 86_400_000
+    bh = (c[-1][4] - c[0][4]) / c[0][4] * 100
+    out = [
+        f"{symbol} {timeframe} | {_d(c[0][0])} - {_d(c[-1][0])} ({days:.0f} gun, {len(c)} mum)",
+    ]
+    tr = res.trades
+    if not tr:
+        out.append("Bu donemde kurallara uyan islem olmadi.")
+        if res.rejected:
+            out.append(f"Asgari tutar/risk nedeniyle acilamayan sinyal: {res.rejected}")
+        out.append(f"Al-tut (fiyat degisimi): %{bh:+.1f}")
+        return out
+    st = _stats(tr, start_equity)
+    ret = (res.end_equity - start_equity) / start_equity * 100
+    pf = "sonsuz" if st["pf"] == float("inf") else f"{st['pf']:.2f}"
+    hold_h = sum((t.exit_ts - t.entry_ts) for t in tr) / len(tr) / 3_600_000
+    out += [
+        f"Sermaye   {start_equity:.2f} -> {res.end_equity:.2f} USDT ({ret:+.1f}%)",
+        f"Islem     {st['n']} (ayda ~{st['n'] / max(days / 30, 1e-9):.1f}) | Isabet %{st['win']:.1f}",
+        f"Kar fakt. {pf} | Maks. dusus %{st['mdd']:.1f}",
+        f"Ort.kazanc {st['avg_win']:+.2f} | Ort.kayip {st['avg_loss']:+.2f} | Ort.sure {hold_h:.0f} sa",
+    ]
+    for side in ("long", "short"):
+        sub = [t for t in tr if t.side == side]
+        if sub:
+            ss = _stats(sub, start_equity)
+            out.append(f"{side.upper():<5}     {ss['n']} islem | isabet %{ss['win']:.0f} | net {ss['net']:+.2f}")
+    by: dict = {}
+    for t in tr:
         by[t.reason] = by.get(t.reason, 0) + 1
+    out.append("Cikis     " + ", ".join(f"{k} {v}" for k, v in sorted(by.items())))
+    if res.rejected:
+        out.append(f"Acilamayan sinyal (asgari tutar/risk): {res.rejected}")
+    out.append(f"Al-tut    fiyat %{bh:+.1f}")
+    out.append("")
+    out.append(f"Son {min(last_n, len(tr))} islem (giris -> cikis):")
+    for t in tr[-last_n:]:
+        out.append(f"{_d(t.entry_ts)} {t.side[0].upper()} {t.entry:.6g} -> {t.exit:.6g} {t.reason:<5} {t.pnl:+.2f}")
+    return out
+
+
+def summarize(trades: List[BTTrade], start_equity: float, end_equity: float) -> str:
+    if not trades:
+        return "Islem yok."
+    st = _stats(trades, start_equity)
     return (
-        f"Islem: {len(trades)}  Isabet: %{len(wins) / len(trades) * 100:.1f}  Kar faktoru: {pf:.2f}\n"
-        f"Net: {sum(pnls):+.2f} USDT  Baslangic {start_equity:.2f} -> Bitis {end_equity:.2f}\n"
-        f"Maks. dusus: %{mdd:.1f}  Ort/islem: {sum(pnls) / len(trades):+.3f} USDT\n"
-        f"Cikis nedenleri: {by}"
+        f"Islem: {st['n']}  Isabet: %{st['win']:.1f}  Kar faktoru: {st['pf']:.2f}\n"
+        f"Net: {st['net']:+.2f} USDT  Baslangic {start_equity:.2f} -> Bitis {end_equity:.2f}\n"
+        f"Maks. dusus: %{st['mdd']:.1f}"
     )
+
+
+def backtest_symbol(cfg: Settings, ex, symbol: str, days: int) -> List[str]:
+    """Borsadan gecmis veriyi indirir, borsanin gercek asgari tutarlariyla test eder."""
+    from .exchanges import perp_symbol
+
+    psym = perp_symbol(symbol)
+    if ex.markets is None:
+        ex.load_markets()
+    m = ex.market(psym)
+    lim = m.get("limits") or {}
+    candles = fetch_history(ex, psym, cfg.timeframe, days)
+    res = run_backtest(
+        cfg, candles, symbol,
+        contract_size=float(m.get("contractSize") or 1.0),
+        amount_to_precision=lambda x: float(ex.amount_to_precision(psym, x)),
+        min_amount=(lim.get("amount") or {}).get("min"),
+        min_cost=(lim.get("cost") or {}).get("min"),
+    )
+    return report_lines(res, cfg.paper_start_equity, symbol, cfg.timeframe)

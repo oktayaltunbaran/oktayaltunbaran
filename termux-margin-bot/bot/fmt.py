@@ -77,10 +77,37 @@ def analysis_text(an: Analysis, snap: Optional[MarketSnapshot], oi_change: Optio
     lines.append("")
     lines += market_block(snap, oi_change)
     if an.signal:
-        lines.append(f"\n<b>Sonuc:</b> {side_label(an.signal.side)} sinyali")
+        sg = an.signal
+        lines.append(f"\n<b>Sonuc:</b> {side_label(sg.side)} SINYALI")
+        lines.append(f"Giris <code>{px(sg.entry_ref)}</code> · Stop <code>{px(sg.sl)}</code> · "
+                     f"Hedef <code>{px(sg.tp)}</code>")
+    elif an.plan:
+        lines.append("")
+        lines += plan_block(an.plan)
     else:
-        lines.append("\n<b>Sonuc:</b> sinyal yok")
+        lines.append("\n<b>Sonuc:</b> sinyal yok · trend net degil, islem plani yok")
     return "\n".join(lines)
+
+
+def plan_block(pl) -> list:
+    d = 1 if pl.side == "long" else -1
+    sl_pct = (pl.sl - pl.entry) / pl.entry * 100
+    tp_pct = (pl.tp - pl.entry) / pl.entry * 100
+    where = "asagida" if pl.distance_pct < 0 else "yukarida"
+    inv = "altinda" if d == 1 else "ustunde"
+    lines = [
+        f"📍 <b>Islem plani (tahmini)</b> · {side_label(pl.side)}",
+        f"Giris bolgesi <code>{px(pl.zone_low)} – {px(pl.zone_high)}</code>",
+        f"  (simdiki fiyatin %{abs(pl.distance_pct):.2f} {where})",
+        f"Stop  <code>{px(pl.sl)}</code> ({pct(sl_pct)})",
+        f"Hedef <code>{px(pl.tp)}</code> ({pct(tp_pct)})",
+        f"Iptal: 2s kapanis EMA200 ({px(pl.invalidation)}) {inv}",
+    ]
+    if pl.waiting_for:
+        lines.append("Beklenen: " + "; ".join(esc(w) for w in pl.waiting_for))
+    lines.append("<i>Kosullar olusunca bot sinyal verir; oto modda kendisi girer, "
+                 "stop/hedef borsaya konur.</i>")
+    return lines
 
 
 def signal_text(

@@ -33,6 +33,7 @@ COMMANDS = [
     ("dur", "Yeni islem acmayi duraklat"),
     ("devam", "Duraklatmayi kaldir"),
     ("oto", "Otomatik islem: /oto ac | /oto kapat"),
+    ("backtest", "Gecmis veride test: /backtest [ETH] [gun]"),
     ("ayarlar", "Gecerli ayarlar"),
     ("yardim", "Komut listesi"),
 ]
@@ -460,6 +461,27 @@ class Engine:
         allt = self.storage.closed_trades(0, mode=self.broker.mode)
         week = self.storage.closed_trades(now_ms() - 7 * 86_400_000, mode=self.broker.mode)
         self.notify(fmt.stats_text(week, "Son 7 gun") + "\n\n" + fmt.stats_text(allt, "Tum zamanlar"))
+
+    def cmd_backtest(self, args):
+        from .backtest import backtest_symbol
+
+        syms = [a.upper() if "/" in a else f"{a.upper()}/USDT" for a in args if not a.isdigit()] or self.cfg.symbols
+        days = next((int(a) for a in args if a.isdigit()), 365)
+        days = max(30, min(days, 1095))
+        self.notify(f"⏳ Backtest: {esc(', '.join(syms))} · {days} gun · {self.cfg.timeframe}. "
+                    f"Veri indiriliyor, sembol basina ~10-30 sn surer…", silent=True)
+        ex = self.md.swap[self.cfg.exec_exchange]
+        for sym in syms:
+            try:
+                lines = backtest_symbol(self.cfg, ex, sym, days)
+                self.notify(f"📊 <b>Backtest · {esc(sym)}</b>\n<pre>{esc(chr(10).join(lines))}</pre>")
+            except Exception as e:  # noqa: BLE001
+                self.notify(f"{esc(sym)}: backtest yapilamadi ({esc(type(e).__name__)}: {esc(str(e)[:200])})")
+        self.notify(
+            "<i>Varsayimlar kotumser: giris sonraki mum acilisi + kayma, ayni mumda SL ve TP varsa SL, "
+            "komisyon dahil. Funding/OI filtresi gecmise uygulanmaz. Gecmis sonuc gelecegi garanti etmez.</i>",
+            silent=True,
+        )
 
     def cmd_dur(self, args):
         self.storage.set("paused", True)

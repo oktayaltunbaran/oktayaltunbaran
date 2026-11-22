@@ -51,6 +51,27 @@ class Signal:
 
 
 @dataclass
+class TradePlan:
+    """Sinyal HENUZ yokken trend yonunde beklenen islemin tahmini seviyeleri.
+
+    Strateji bir geri cekilme stratejisi oldugu icin beklenen giris bolgesi
+    EMA21 +/- 0.25*ATR'dir. Stop ve hedef, sinyal tetiklendiginde kullanilacak
+    ayni formulle (ATR_SL_MULT*ATR, TP_R_MULT*R) bu referans girise gore
+    hesaplanir. Gercek seviyeler, tetikleyen mumun kapanisina gore yeniden
+    hesaplanir; bu yuzden bunlar YAKLASIK degerlerdir."""
+
+    side: str
+    zone_low: float
+    zone_high: float
+    entry: float
+    sl: float
+    tp: float
+    invalidation: float  # bu seviyenin otesinde kapanis -> plan iptal (EMA200)
+    distance_pct: float  # simdiki fiyatin giris referansina uzakligi (%)
+    waiting_for: List[str] = field(default_factory=list)
+
+
+@dataclass
 class Analysis:
     symbol: str
     bar_ts: int
@@ -66,6 +87,7 @@ class Analysis:
     blocks: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     signal: Optional[Signal] = None
+    plan: Optional[TradePlan] = None
 
     @property
     def atr_pct(self) -> float:
@@ -194,15 +216,18 @@ class Strategy:
             else:
                 an.notes.append(f"OI %{oi_change_pct:+.2f}: fiyatla ters (pozisyon kapanisi olabilir)")
 
-        if not tech_ok or an.blocks:
-            return an
-
-        # ---- SL / TP ----
+        # ---- SL / TP mesafesi ----
         sl_dist = c.atr_sl_mult * ai
         min_dist = close * c.min_sl_pct / 100
-        if sl_dist < min_dist:
+        widened = sl_dist < min_dist
+        sl_dist = max(sl_dist, min_dist)
+
+        if not tech_ok or an.blocks:
+            an.plan = self._plan(an, long_, efi, esi, ai, sl_dist, close)
+            return an
+
+        if widened:
             an.notes.append(f"SL mesafesi min %{c.min_sl_pct:g}'e genisletildi")
-            sl_dist = min_dist
         sl_pct = sl_dist / close * 100
         if sl_pct > c.max_sl_pct:
             an.blocks.append(f"SL %{sl_pct:.2f} > max %{c.max_sl_pct:g} (volatilite cok yuksek)")
@@ -213,3 +238,27 @@ class Strategy:
             sl, tp = close + sl_dist, close - c.tp_r_mult * sl_dist
         an.signal = Signal(symbol, an.bias, ts[i], close, sl, tp, ai, sl_pct)
         return an
+
+    def _plan(self, an: Analysis, long_: bool, ema21: float, ema200: float, atr: float,
+              sl_dist: float, close: float) -> TradePlan:
+        c = self.cfg
+        d = 1 if long_ else -1
+        entry = ema21
+        plan = TradePlan(
+            side="long" if long_ else "short",
+            zone_low=ema21 - 0.25 * atr,
+            zone_high=ema21 + 0.25 * atr,
+            entry=entry,
+            sl=entry - d * sl_dist,
+            tp=entry + d * c.tp_r_mult * sl_dist,
+            invalidation=ema200,
+            distance_pct=(entry - close) / close * 100,
+        )
+        for name, ok in an.checks:
+            if not ok:
+                plan.waiting_for.append(name)
+        if sl_dist / entry * 100 > c.max_sl_pct:
+            plan.waiting_for.append(f"Volatilite dusmeli (SL > %{c.max_sl_pct:g})")
+        plan.waiting_for += [f"Filtre: {b}" for b in an.blocks]
+        return plan
+

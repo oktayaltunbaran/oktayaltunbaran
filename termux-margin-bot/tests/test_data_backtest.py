@@ -1,10 +1,23 @@
 import random
 import unittest
 
-from bot.backtest import run_backtest, summarize
+from bot.backtest import report_lines, run_backtest, summarize
 from bot.exchanges import MarketData, MarketSnapshot, ExchangeSnapshot
 from bot.strategy import Strategy
 from tests.helpers import TF, make_candles, settings
+
+
+def random_rows(n=3000, seed=7):
+    """Rastgele yuruyus + 400 mumda bir yon degistiren rejimler."""
+    rnd = random.Random(seed)
+    rows, p = [], 100.0
+    for k in range(n):
+        drift = 0.002 if (k // 400) % 2 == 0 else -0.002
+        o = p
+        p *= 1 + drift + rnd.gauss(0, 0.008)
+        rows.append([k * TF, o, max(o, p) * (1 + abs(rnd.gauss(0, 0.003))),
+                     min(o, p) * (1 - abs(rnd.gauss(0, 0.003))), p, 1])
+    return rows
 
 
 class PagedExchange:
@@ -75,17 +88,10 @@ class TestBacktest(unittest.TestCase):
         self.assertEqual(a1.checks, a2.checks)
 
     def test_runs_and_accounts(self):
-        random.seed(7)
         cfg = settings()
-        # rastgele yuruyus + rejim degisimleri
-        rows, p = [], 100.0
-        for k in range(3000):
-            drift = 0.002 if (k // 400) % 2 == 0 else -0.002
-            o = p
-            p *= 1 + drift + random.gauss(0, 0.008)
-            rows.append([k * TF, o, max(o, p) * (1 + abs(random.gauss(0, 0.003))),
-                         min(o, p) * (1 - abs(random.gauss(0, 0.003))), p, 1])
-        trades, end = run_backtest(cfg, rows, "X")
+        rows = random_rows()
+        res = run_backtest(cfg, rows, "X")
+        trades, end = res.trades, res.end_equity
         self.assertGreater(len(trades), 0)
         self.assertAlmostEqual(end, cfg.paper_start_equity + sum(t.pnl for t in trades), places=6)
         for t in trades:
@@ -97,6 +103,18 @@ class TestBacktest(unittest.TestCase):
         for a, b in zip(trades, trades[1:]):
             self.assertGreaterEqual(b.entry_ts, a.exit_ts - TF)
         self.assertIn("Islem", summarize(trades, cfg.paper_start_equity, end))
+        rep = "\n".join(report_lines(res, cfg.paper_start_equity, "X/USDT", "2h"))
+        for key in ("Sermaye", "Isabet", "Kar fakt.", "Maks. dusus", "Son ", "Al-tut"):
+            self.assertIn(key, rep)
+
+    def test_min_cost_rejections_counted(self):
+        cfg = settings()
+        rows = random_rows()
+        self.assertGreater(len(run_backtest(cfg, rows, "X").trades), 0)  # normalde islem var
+        res = run_backtest(cfg, rows, "X", min_cost=10_000)  # hicbir islem acilamaz
+        self.assertEqual(res.trades, [])
+        self.assertGreater(res.rejected, 0)
+        self.assertIn("acilamayan", "\n".join(report_lines(res, 30, "X/USDT", "2h")))
 
 
 if __name__ == "__main__":
