@@ -47,6 +47,7 @@ class TestOhlcvPaging(unittest.TestCase):
     def test_pages_to_1000(self):
         md = MarketData.__new__(MarketData)
         md._loaded = {}
+        md._candles = {}
         ex = PagedExchange()
         md.swap = {"okx": ex}
         md._ensure = lambda e: None
@@ -55,6 +56,15 @@ class TestOhlcvPaging(unittest.TestCase):
         self.assertEqual(out[-1][0], ex.rows[-1][0])
         self.assertTrue(all(b[0] - a[0] == TF for a, b in zip(out, out[1:])))  # bosluk / tekrar yok
         self.assertLessEqual(ex.calls, 5)
+        # ikinci cagri: onbellekten, yalnizca son mumdan itibaren TEK istek
+        ex.rows.append([ex.now, 1, 2, 0.5, 1.5, 1])
+        ex.now += TF
+        calls = ex.calls
+        out2 = md.ohlcv("okx", "ETH/USDT", "2h", limit=1000)
+        self.assertEqual(ex.calls - calls, 1)
+        self.assertEqual(len(out2), 1000)
+        self.assertEqual(out2[-1][0], ex.rows[-1][0])
+        self.assertTrue(all(b[0] - a[0] == TF for a, b in zip(out2, out2[1:])))
 
 
 class TestSnapshotMath(unittest.TestCase):

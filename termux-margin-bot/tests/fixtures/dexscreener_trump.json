@@ -1,0 +1,60 @@
+{
+"schemaVersion": "1.0.0",
+"pairs": [
+{
+"chainId": "solana",
+"dexId": "orca",
+"liquidity": {
+"base": 99909,
+"quote": 442.7565,
+"usd": 120577.27
+},
+"pairCreatedAt": 1737215500000,
+"fdv": 894926615
+},
+{
+"chainId": "solana",
+"dexId": "meteora",
+"liquidity": {
+"base": 2958481,
+"quote": 1216393,
+"usd": 3858909.2
+},
+"pairCreatedAt": 1737191463000,
+"fdv": 893199524
+},
+{
+"chainId": "solana",
+"dexId": "raydium",
+"liquidity": {
+"base": 347998,
+"quote": 311192,
+"usd": 622323.17
+},
+"pairCreatedAt": 1737417722000,
+"fdv": 894057075
+},
+{
+"chainId": "solana",
+"dexId": "orca",
+"liquidity": {
+"base": 347800,
+"quote": 312651,
+"usd": 623298.11
+},
+"pairCreatedAt": 1754499167000,
+"fdv": 893174166
+},
+{
+"chainId": "solana",
+"dexId": "raydium",
+"liquidity": {
+"base": 31197,
+"quote": 67.7793,
+"usd": 32691.88
+},
+"pairCreatedAt": 1737166660000,
+"fdv": 894942668
+}
+]
+}

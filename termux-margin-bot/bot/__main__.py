@@ -19,7 +19,7 @@ from .logger import register_secrets, setup_logging
 
 
 def _secrets(cfg):
-    vals = [cfg.telegram_token]
+    vals = [cfg.telegram_token, cfg.cmc_api_key, cfg.coingecko_api_key]
     for k in cfg.keys.values():
         vals += [k.api_key, k.secret, k.password]
     register_secrets(vals)
@@ -156,7 +156,7 @@ def cmd_chatid() -> int:
 
 KEEP_KEYS = (
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "MODE", "AUTO_TRADE", "EXEC_EXCHANGE", "USE_TESTNET",
-    "DATA_EXCHANGES", "DATA_DIR",
+    "DATA_EXCHANGES", "DATA_DIR", "CMC_API_KEY", "COINGECKO_API_KEY",
     "BINANCE_API_KEY", "BINANCE_API_SECRET", "BYBIT_API_KEY", "BYBIT_API_SECRET",
     "OKX_API_KEY", "OKX_API_SECRET", "OKX_API_PASSWORD",
 )

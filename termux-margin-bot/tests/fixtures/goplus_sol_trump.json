@@ -1,0 +1,180 @@
+{
+"code": 1,
+"message": "ok",
+"result": {
+"6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN": {
+"balance_mutable_authority": {
+"authority": [],
+"status": "0"
+},
+"closable": {
+"authority": [],
+"status": "0"
+},
+"creators": [
+{
+"address": "5e2qRc1DNEXmyxP8qwPwJhRWjef7usLyi7v5xjqLr5G7",
+"malicious_address": 0
+}
+],
+"default_account_state": "1",
+"default_account_state_upgradable": {
+"authority": [],
+"status": "0"
+},
+"dex": [
+{
+"burn_percent": null,
+"day": {
+"price_max": "-1",
+"price_min": "-1",
+"volume": "136509.394793919000"
+},
+"dex_name": "orca",
+"fee_rate": "0.0016",
+"id": "5WrgXzWiz93g4L5XBmr3ggMybW5gfL7drNAKoQMgpDHc",
+"lp_amount": null,
+"month": {
+"price_max": "-1",
+"price_min": "-1",
+"volume": "3935468.91476994"
+},
+"open_time": "0",
+"price": "0.89626861587871350133",
+"tvl": "624516.83",
+"type": "Concentrated",
+"week": {
+"price_max": "-1",
+"price_min": "-1",
+"volume": "856064.710759809000"
+}
+}
+],
+"freezable": {
+"authority": [],
+"status": "0"
+},
+"holder_count": "692418",
+"holders": [
+{
+"account": "2RH6rUTPBJ9rUDPpuV9b8z1YL56k1tYU6Uk5ZoaEFFSK",
+"balance": "718132064.328498",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.7181",
+"tag": "",
+"token_account": "HkykUVWTctptXZmRTWearMsH4SaQNmE4Ku3tMJe5v2mH"
+},
+{
+"account": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+"balance": "57000000.000000",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.0570",
+"tag": "",
+"token_account": "7DaumTmUaK3xcpd8XJXAjUzDrCqPuj3S1Sc2cbootBUN"
+},
+{
+"account": "8N2ssXZGJbvVLszanERuCJpLZd2nuADgpZwLkDDxwNnS",
+"balance": "35130981.498916",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.0351",
+"tag": "",
+"token_account": "3zya4BbfRV8a4nKyAmxqufyGYEH5TF3dZFYZvE5kSj7N"
+},
+{
+"account": "51yZyDSnec4xnUv7XLRVYcDyV4x3wUtzrDcRaYbmQU5j",
+"balance": "29778647.343577",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.0298",
+"tag": "",
+"token_account": "AJehmB6EdvLc34gYKtHUSGt2mvRLkjKYTpX2rqWttfVP"
+},
+{
+"account": "CBEADkb8TZAXHjVE3zwad4L995GZE7rJcacJ7asebkVG",
+"balance": "13979702.742518",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.0140",
+"tag": "",
+"token_account": "E891sHy7Sw7yYhzSYAJCJipAiUU8YLj33VHkutLNBuck"
+},
+{
+"account": "8Mm46CsqxiyAputDUp2cXHg41HE3BfynTeMBDwzrMZQH",
+"balance": "10489438.951778",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.0105",
+"tag": "",
+"token_account": "3UCFy6h41kJSyRxWT7Tra5WUU3EyTZ9t4zRrSRh3kcdQ"
+},
+{
+"account": "3gd3dqgtJ4jWfBfLYTX67DALFetjc5iS72sCgRhCkW2u",
+"balance": "7318333.742000",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.0073",
+"tag": "",
+"token_account": "BdnDGUhkJYJkHoPeiKfVTDRbGayGtptC5psCSJKxJo1c"
+},
+{
+"account": "3B7XAQrLoEMDEGvX8569F9GRb9PcXXocJmj5wvhhei9z",
+"balance": "5395512.058351",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.0054",
+"tag": "",
+"token_account": "8veyTUzoqVsLHe4ACtcn5v5ctfR9yYHaHT3Txg2grATr"
+},
+{
+"account": "9d9mb8kooFfaD3SctgZtkxQypkshx6ezhbKio89ixyy2",
+"balance": "3597353.556661",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.0036",
+"tag": "",
+"token_account": "AK93dERw7MJsGFBUPfV1bkXzDviJZM1K6vg2yGDugk7L"
+},
+{
+"account": "65AXrL2wYbrwEF37euk7Kf56QqGUudWMTYTQcj73y1Ye",
+"balance": "3237300.204626",
+"is_locked": 0,
+"locked_detail": [],
+"percent": "0.0032",
+"tag": "",
+"token_account": "6wqp9JMQNFDs2eotmSpJhcgt47fFA6qRa8uDugTFbJGu"
+}
+],
+"lp_holders": [],
+"metadata": {
+"description": "",
+"name": "OFFICIAL TRUMP",
+"symbol": "TRUMP",
+"uri": "https://arweave.net/cSCP0h2n1crjeSWE9KF-XtLciJalDNFs7Vf-Sm0NNY0"
+},
+"metadata_mutable": {
+"metadata_upgrade_authority": [],
+"status": "0"
+},
+"mintable": {
+"authority": [],
+"status": "0"
+},
+"non_transferable": "0",
+"total_supply": "999998770.799046",
+"transfer_fee": {},
+"transfer_fee_upgradable": {
+"authority": [],
+"status": "0"
+},
+"transfer_hook": [],
+"transfer_hook_upgradable": {
+"authority": [],
+"status": "0"
+},
+"trusted_token": 0
+}
+}
+}

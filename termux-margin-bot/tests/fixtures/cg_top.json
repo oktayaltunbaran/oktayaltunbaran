@@ -1,0 +1,222 @@
+[
+{
+"id": "tether",
+"symbol": "usdt",
+"name": "Tether",
+"current_price": 0.998832,
+"total_volume": 38460905562,
+"price_change_percentage_24h": 0.02819,
+"market_cap_rank": 3,
+"high_24h": 0.998994,
+"low_24h": 0.998169
+},
+{
+"id": "bitcoin",
+"symbol": "btc",
+"name": "Bitcoin",
+"current_price": 60761,
+"total_volume": 29934024158,
+"price_change_percentage_24h": 1.28849,
+"market_cap_rank": 1,
+"high_24h": 61447,
+"low_24h": 58696
+},
+{
+"id": "usd-coin",
+"symbol": "usdc",
+"name": "USDC",
+"current_price": 0.999425,
+"total_volume": 9127210673,
+"price_change_percentage_24h": 0.02102,
+"market_cap_rank": 5,
+"high_24h": 0.999533,
+"low_24h": 0.999099
+},
+{
+"id": "ethereum",
+"symbol": "eth",
+"name": "Ethereum",
+"current_price": 1713.41,
+"total_volume": 7972674332,
+"price_change_percentage_24h": 2.00396,
+"market_cap_rank": 2,
+"high_24h": 1723.34,
+"low_24h": 1646.2
+},
+{
+"id": "united-stables",
+"symbol": "u",
+"name": "United Stables",
+"current_price": 1.0,
+"total_volume": 2960164753,
+"price_change_percentage_24h": 0.11672,
+"market_cap_rank": 47,
+"high_24h": 1.0,
+"low_24h": 0.998782
+},
+{
+"id": "solana",
+"symbol": "sol",
+"name": "Solana",
+"current_price": 70.33,
+"total_volume": 1845225673,
+"price_change_percentage_24h": -0.29492,
+"market_cap_rank": 7,
+"high_24h": 71.09,
+"low_24h": 68.67
+},
+{
+"id": "ripple",
+"symbol": "xrp",
+"name": "XRP",
+"current_price": 0.927109,
+"total_volume": 1089223839,
+"price_change_percentage_24h": -0.65004,
+"market_cap_rank": 6,
+"high_24h": 0.936918,
+"low_24h": 0.911127
+},
+{
+"id": "usd1-wlfi",
+"symbol": "usd1",
+"name": "USD1",
+"current_price": 0.999369,
+"total_volume": 643738332,
+"price_change_percentage_24h": 0.05085,
+"market_cap_rank": 30,
+"high_24h": 0.999709,
+"low_24h": 0.998635
+},
+{
+"id": "hyperliquid",
+"symbol": "hype",
+"name": "Hyperliquid",
+"current_price": 63.13,
+"total_volume": 572835516,
+"price_change_percentage_24h": 4.10755,
+"market_cap_rank": 10,
+"high_24h": 63.19,
+"low_24h": 59.53
+},
+{
+"id": "zcash",
+"symbol": "zec",
+"name": "Zcash",
+"current_price": 796.42,
+"total_volume": 517552465,
+"price_change_percentage_24h": 1.33924,
+"market_cap_rank": 11,
+"high_24h": 805.0,
+"low_24h": 761.85
+},
+{
+"id": "binancecoin",
+"symbol": "bnb",
+"name": "BNB",
+"current_price": 556.82,
+"total_volume": 471542118,
+"price_change_percentage_24h": 1.7653,
+"market_cap_rank": 4,
+"high_24h": 559.65,
+"low_24h": 536.15
+},
+{
+"id": "near",
+"symbol": "near",
+"name": "NEAR Protocol",
+"current_price": 3.01,
+"total_volume": 398551604,
+"price_change_percentage_24h": 6.16656,
+"market_cap_rank": 23,
+"high_24h": 3.05,
+"low_24h": 2.83
+},
+{
+"id": "pieverse",
+"symbol": "pieverse",
+"name": "Pieverse",
+"current_price": 3.73,
+"total_volume": 376303008,
+"price_change_percentage_24h": 11.93204,
+"market_cap_rank": 67,
+"high_24h": 5.33,
+"low_24h": 2.76
+},
+{
+"id": "global-dollar",
+"symbol": "usdg",
+"name": "Global Dollar",
+"current_price": 0.99997,
+"total_volume": 372420535,
+"price_change_percentage_24h": -0.00662,
+"market_cap_rank": 33,
+"high_24h": 1.0,
+"low_24h": 0.999922
+},
+{
+"id": "dogecoin",
+"symbol": "doge",
+"name": "Dogecoin",
+"current_price": 0.055128,
+"total_volume": 336617316,
+"price_change_percentage_24h": 0.05527,
+"market_cap_rank": 13,
+"high_24h": 0.055771,
+"low_24h": 0.05372
+},
+{
+"id": "tron",
+"symbol": "trx",
+"name": "TRON",
+"current_price": 0.304901,
+"total_volume": 263328427,
+"price_change_percentage_24h": -0.04747,
+"market_cap_rank": 8,
+"high_24h": 0.306321,
+"low_24h": 0.303102
+},
+{
+"id": "ripple-usd",
+"symbol": "rlusd",
+"name": "Ripple USD",
+"current_price": 0.999891,
+"total_volume": 207256736,
+"price_change_percentage_24h": -0.0149,
+"market_cap_rank": 28,
+"high_24h": 1.0,
+"low_24h": 0.999907
+},
+{
+"id": "uniswap",
+"symbol": "uni",
+"name": "Uniswap",
+"current_price": 4.71,
+"total_volume": 204269060,
+"price_change_percentage_24h": -0.25863,
+"market_cap_rank": 29,
+"high_24h": 4.75,
+"low_24h": 4.55
+},
+{
+"id": "cardano",
+"symbol": "ada",
+"name": "Cardano",
+"current_price": 0.14452,
+"total_volume": 192179396,
+"price_change_percentage_24h": -0.23404,
+"market_cap_rank": 18,
+"high_24h": 0.147039,
+"low_24h": 0.140837
+},
+{
+"id": "sui",
+"symbol": "sui",
+"name": "Sui",
+"current_price": 0.657696,
+"total_volume": 184693990,
+"price_change_percentage_24h": 1.55715,
+"market_cap_rank": 32,
+"high_24h": 0.666278,
+"low_24h": 0.633214
+}
+]

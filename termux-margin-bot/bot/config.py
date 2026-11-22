@@ -81,10 +81,22 @@ class Settings:
     mode: str = "paper"  # paper | live
     auto_trade: bool = False  # False: her sinyal Telegram'dan onay ister
     exec_exchange: str = "binance"
+    # SYMBOLS=TOP30 -> islem listesi 24s hacme gore Top-N coin (stablecoin haric), borsada
+    # USDT perpetual'i olanlar; "Riskli" etiketli meme coinler haric. Liste alinamazsa
+    # fallback_symbols kullanilir.
+    auto_symbols: bool = True
+    universe_size: int = 30
+    meme_count: int = 30
+    universe_refresh_min: int = 360
+    meme_refresh_min: int = 30
+    security_ttl_min: int = 60
+    coins_enabled: bool = True
+    cmc_api_key: str = ""
+    coingecko_api_key: str = ""
     data_exchanges: List[str] = field(default_factory=lambda: list(SUPPORTED_EXCHANGES))
     use_testnet: bool = False
     symbols: List[str] = field(default_factory=lambda: [
-        "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
         "ADA/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT",
     ])
     timeframe: str = "2h"
@@ -227,6 +239,8 @@ class Settings:
                 errs.append("TP_ROI_PCT > 0 olmali")
             if self.fixed_margin_usdt <= 0:
                 errs.append("FIXED_MARGIN_USDT > 0 olmali")
+        if not (5 <= self.universe_size <= 60) or not (5 <= self.meme_count <= 60):
+            errs.append("TOP liste ve MEME_COUNT 5..60 araliginda olmali")
         if not (1 <= self.max_open_positions <= 5):
             errs.append("MAX_OPEN_POSITIONS 1..5 olmali")
         if self.max_daily_loss_usdt < (self.sl_loss_usdt if self.risk_mode == "fixed" else self.risk_per_trade_usdt):
@@ -300,6 +314,10 @@ _INT_FIELDS = {
     "ADX_LEN": "adx_len",
     "MAX_HOLD_CANDLES": "max_hold_candles",
     "MONITOR_INTERVAL_SEC": "monitor_interval_sec",
+    "MEME_COUNT": "meme_count",
+    "UNIVERSE_REFRESH_MIN": "universe_refresh_min",
+    "MEME_REFRESH_MIN": "meme_refresh_min",
+    "SECURITY_TTL_MIN": "security_ttl_min",
     "ST_LEN": "st_len",
 }
 _BOOL_FIELDS = {
@@ -307,6 +325,7 @@ _BOOL_FIELDS = {
     "USE_TESTNET": "use_testnet",
     "REQUIRE_ISOLATED": "require_isolated",
     "CYCLE_REPORT": "cycle_report",
+    "COINS_ENABLED": "coins_enabled",
 }
 
 
@@ -329,7 +348,16 @@ def load_settings(env_path: Optional[Path] = None, validate: bool = True) -> Set
         if raw.get("DATA_EXCHANGES"):
             s.data_exchanges = [x.strip().lower() for x in raw["DATA_EXCHANGES"].split(",") if x.strip()]
         if raw.get("SYMBOLS"):
-            s.symbols = [x.strip().upper() for x in raw["SYMBOLS"].split(",") if x.strip()]
+            val = raw["SYMBOLS"].strip().upper()
+            if val.startswith("TOP"):
+                s.auto_symbols = True
+                if val[3:].isdigit():
+                    s.universe_size = int(val[3:])
+            else:
+                s.auto_symbols = False
+                s.symbols = [x.strip().upper() for x in val.split(",") if x.strip()]
+        s.cmc_api_key = raw.get("CMC_API_KEY", "").strip()
+        s.coingecko_api_key = raw.get("COINGECKO_API_KEY", "").strip()
         for env, attr in _FLOAT_FIELDS.items():
             if env in raw and raw[env] != "":
                 setattr(s, attr, float(raw[env]))
@@ -358,7 +386,7 @@ def load_settings(env_path: Optional[Path] = None, validate: bool = True) -> Set
 
 def _known_keys() -> set:
     keys = set(_FLOAT_FIELDS) | set(_INT_FIELDS) | set(_BOOL_FIELDS)
-    keys |= {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "MODE", "EXEC_EXCHANGE", "TIMEFRAME", "SYMBOLS", "DATA_DIR", "DATA_EXCHANGES", "STRATEGY", "RISK_MODE"}
+    keys |= {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "MODE", "EXEC_EXCHANGE", "TIMEFRAME", "SYMBOLS", "DATA_DIR", "DATA_EXCHANGES", "STRATEGY", "RISK_MODE", "CMC_API_KEY", "COINGECKO_API_KEY"}
     for ex in SUPPORTED_EXCHANGES:
         p = ex.upper()
         keys |= {f"{p}_API_KEY", f"{p}_API_SECRET", f"{p}_API_PASSWORD"}

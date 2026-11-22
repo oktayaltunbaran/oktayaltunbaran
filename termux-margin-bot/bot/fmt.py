@@ -268,3 +268,85 @@ def summary_text(rows, tf: str) -> str:
         out.append("🔔 Sinyal: " + ", ".join(esc(x) for x in sig))
     out.append("Ayrinti ve giris/cikis semasi: <code>/analiz ETH</code>")
     return "\n".join(out)
+
+
+# ------------------------------------------------------------------ coin listeleri
+def _vol(v: float) -> str:
+    if v >= 1e9:
+        return f"${v / 1e9:.1f}B"
+    if v >= 1e6:
+        return f"${v / 1e6:.0f}M"
+    return f"${v / 1e3:.0f}K"
+
+
+def _chg(v) -> str:
+    return "—" if v is None else f"{v:+.1f}%"
+
+
+def top_text(coins, resolver, trading: set, source: str, exchange: str) -> str:
+    lines = [f"📈 <b>24s hacme gore Top {len(coins)}</b> · {esc(source)}",
+             "<i>stablecoin / altin / wrapped haric</i>", ""]
+    for i, c in enumerate(coins, 1):
+        found = resolver(c.symbol)
+        if found:
+            perp = found[0].split("/")[0]
+            mark = "✅ islemde" if found[0] in trading else "⛔ riskli meme"
+            perp_txt = f"{esc(perp)} · {mark}"
+        else:
+            perp_txt = f"{esc(exchange)} vadelide yok"
+        lines.append(f"{i}. <b>{esc(c.symbol)}</b> {_vol(c.volume_24h)} {_chg(c.change_24h)} · {perp_txt}")
+    lines.append("")
+    lines.append(f"Bot {len(trading)} coini 2s grafikte izliyor (/analiz).")
+    return "\n".join(lines)
+
+
+def meme_text(memes, security: dict, source: str, pending: int) -> str:
+    from .coins import LEVEL_ICON, UNKNOWN
+
+    lines = [f"🐸 <b>24s hacme gore Top {len(memes)} meme coin</b> · {esc(source)}", ""]
+    for i, m in enumerate(memes, 1):
+        rep = security.get(m.id)
+        lvl = LEVEL_ICON[rep.level if rep else UNKNOWN]
+        chain = esc(m.chain_name) + (f" +{m.other_chains}" if m.other_chains else "")
+        lines.append(f"{i}. <b>{esc(m.symbol)}</b> · {chain} · {_vol(m.volume_24h)} {_chg(m.change_24h)} · {lvl}")
+    lines.append("")
+    if pending:
+        lines.append(f"⏳ {pending} coin icin guvenlik taramasi arka planda suruyor.")
+    lines.append("Ayrinti: <code>/meme PEPE</code>")
+    lines.append("<i>Etiket kontrat ve holder riskini olcer (rug pull, honeypot, mint/freeze, vergi, "
+                 "dagilim, likidite). Fiyat riskini olcmez: meme coinler cok oynaktir.</i>")
+    return "\n".join(lines)
+
+
+def meme_detail(m, rep) -> str:
+    from .coins import LEVEL_ICON, UNKNOWN
+
+    lines = [f"🐸 <b>{esc(m.name)} ({esc(m.symbol)})</b>",
+             f"Ag: {esc(m.chain_name)}" + (f" (+{m.other_chains} agda daha)" if m.other_chains else "")]
+    if m.address:
+        lines.append(f"Kontrat: <code>{esc(m.address)}</code>")
+    lines.append(f"Fiyat {px(m.price)} · 24s {_chg(m.change_24h)} · hacim {_vol(m.volume_24h)}"
+                 + (f" · sira #{m.rank}" if m.rank else ""))
+    lines.append("")
+    if rep is None:
+        lines.append(LEVEL_ICON[UNKNOWN] + " — guvenlik taramasi sirada")
+        return "\n".join(lines)
+    lines.append(f"<b>Guvenlik: {LEVEL_ICON[rep.level]}</b>")
+    facts = []
+    if rep.holders:
+        facts.append(f"holder {rep.holders:,}")
+    if rep.top10_pct is not None:
+        facts.append(f"ilk 10 cuzdan %{rep.top10_pct:.0f}")
+    if rep.liquidity_usd is not None:
+        facts.append(f"DEX likidite {_vol(rep.liquidity_usd)}")
+    if rep.age_days is not None:
+        facts.append(f"yas {rep.age_days:.0f} gun")
+    if facts:
+        lines.append(" · ".join(facts))
+    for r in rep.reasons:
+        icon = "⛔" if rep.level == "RISKLI" and r == rep.reasons[0] else "•"
+        lines.append(f"{icon} {esc(r)}")
+    if rep.checked_at:
+        lines.append(f"<i>Kaynak: {esc(', '.join(rep.sources))} · {ts_str(int(rep.checked_at * 1000))}</i>")
+    lines.append("<i>Ilk 10 cuzdan orani borsa, yakim ve kilitli cuzdanlar haric hesaplanir.</i>")
+    return "\n".join(lines)

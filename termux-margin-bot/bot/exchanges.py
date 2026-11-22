@@ -18,7 +18,7 @@ import logging
 import statistics
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import ccxt
 
@@ -32,6 +32,30 @@ _COMMON = {"enableRateLimit": True, "timeout": 15_000}
 def perp_symbol(spot_symbol: str) -> str:
     base, quote = spot_symbol.split("/")
     return f"{base}/{quote}:{quote}"
+
+
+# Dusuk fiyatli coinler vadelide carpanla listelenir (Binance 1000PEPE, 1000000MOG, 1MBABYDOGE)
+_MULT_PREFIXES = (("1000000", 1_000_000), ("1M", 1_000_000), ("100000", 100_000), ("10000", 10_000), ("1000", 1_000))
+
+
+def split_multiplier(base: str) -> Tuple[str, int]:
+    """'1000PEPE' -> ('PEPE', 1000); 'BTC' -> ('BTC', 1)."""
+    for pre, m in _MULT_PREFIXES:
+        if base.startswith(pre) and len(base) > len(pre) and base[len(pre)].isalpha():
+            return base[len(pre):], m
+    return base, 1
+
+
+def resolve_perp(ex, raw_base: str, quote: str = "USDT") -> Optional[Tuple[str, int]]:
+    """Borsada ham coin adi icin USDT perpetual'i bulur: ('1000PEPE/USDT', 1000) gibi."""
+    markets = ex.markets or {}
+    raw, _ = split_multiplier(raw_base.upper())
+    for pre, m in (("", 1),) + tuple((p, mm) for p, mm in _MULT_PREFIXES):
+        sym = f"{pre}{raw}/{quote}:{quote}"
+        mk = markets.get(sym)
+        if mk is not None and mk.get("active", True) is not False and mk.get("linear", True) is not False:
+            return f"{pre}{raw}/{quote}", m
+    return None
 
 
 def make_client(name: str, kind: str, keys: Optional[ExchangeKeys] = None, testnet: bool = False) -> ccxt.Exchange:
@@ -164,6 +188,7 @@ class MarketData:
         self.spot: Dict[str, ccxt.Exchange] = {n: make_client(n, "spot") for n in self.names}
         self.swap: Dict[str, ccxt.Exchange] = {n: make_client(n, "swap") for n in self.names}
         self._loaded: Dict[str, float] = {}
+        self._candles: Dict[tuple, List[List[float]]] = {}
 
     def _ensure(self, ex: ccxt.Exchange) -> None:
         key = f"{ex.id}:{ex.options.get('defaultType', '')}"
@@ -186,34 +211,51 @@ class MarketData:
         now = ex.milliseconds()
         since = now - limit * tf_ms
         page = 300
+        key = (exchange, symbol, timeframe)
+        cached = self._candles.get(key)
         out: List[List[float]] = []
+        if cached and len(cached) >= limit // 2 and cached[-1][0] >= now - 50 * tf_ms:
+            # Onbellek: yalnizca son (kapanmamis) mumdan itibaren yenilerini cek (1 istek)
+            out = [c for c in cached if c[0] < cached[-1][0]]
+            since = cached[-1][0]
         for _ in range(limit // page + 3):
-            batch = ex.fetch_ohlcv(psym, timeframe, since=since, limit=page)
-            if out:
-                batch = [b for b in batch if b[0] > out[-1][0]]
+            raw = ex.fetch_ohlcv(psym, timeframe, since=since, limit=page)
+            batch = [b for b in raw if b[0] > out[-1][0]] if out else raw
             if not batch:
                 break
             out.extend(batch)
             since = int(batch[-1][0]) + tf_ms
-            if since > now:
+            if since > now or len(raw) < page:  # kisa sayfa = guncel veriye ulasildi
                 break
-        return out[-limit:]
+        out = out[-limit:]
+        self._candles[key] = out
+        return out
 
     def snapshot(self, symbol: str) -> MarketSnapshot:
-        psym = perp_symbol(symbol)
+        """Tum fiyatlar botun sembol birimine olceklenir: '1000PEPE/USDT' icin spot PEPE
+        fiyati x1000; OKX'te 'PEPE' perp fiyati x1000 vb. (aksi halde sahte sapma olusur)."""
+        base = symbol.split("/")[0]
+        raw, bot_mult = split_multiplier(base)
         out: Dict[str, ExchangeSnapshot] = {}
         for n in self.names:
             snap = ExchangeSnapshot(exchange=n)
             sp, sw = self.spot[n], self.swap[n]
+            psym = perp_symbol(symbol)
+            perp_raw: Optional[float] = None  # borsanin kendi birimindeki fiyat (OI dolar hesabi icin)
             try:
                 self._ensure(sp)
-                snap.spot = float(sp.fetch_ticker(symbol)["last"])
+                snap.spot = float(sp.fetch_ticker(f"{raw}/USDT")["last"]) * bot_mult
             except Exception as e:  # noqa: BLE001
                 snap.errors.append(f"spot: {type(e).__name__}")
                 log.warning("%s spot %s: %s", n, symbol, e)
             try:
                 self._ensure(sw)
-                snap.perp = float(sw.fetch_ticker(psym)["last"])
+                found = resolve_perp(sw, raw)
+                if found is None:
+                    raise ValueError(f"{raw} perp yok")
+                psym = perp_symbol(found[0])
+                perp_raw = float(sw.fetch_ticker(psym)["last"])
+                snap.perp = perp_raw * bot_mult / found[1]
             except Exception as e:  # noqa: BLE001
                 snap.errors.append(f"perp: {type(e).__name__}")
                 log.warning("%s perp %s: %s", n, psym, e)
@@ -228,9 +270,9 @@ class MarketData:
             try:
                 oi = sw.fetch_open_interest(psym)
                 val = oi.get("openInterestValue")
-                if val is None and oi.get("openInterestAmount") is not None and snap.perp:
+                if val is None and oi.get("openInterestAmount") is not None and perp_raw:
                     csize = float(sw.market(psym).get("contractSize") or 1.0)
-                    val = float(oi["openInterestAmount"]) * csize * snap.perp
+                    val = float(oi["openInterestAmount"]) * csize * perp_raw
                 if val is not None:
                     snap.oi_usd = float(val)
             except Exception as e:  # noqa: BLE001

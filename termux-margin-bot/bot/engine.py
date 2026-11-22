@@ -17,7 +17,8 @@ import ccxt
 
 from . import fmt
 from .config import Settings
-from .exchanges import MarketData, MarketSnapshot, closed_candles
+from .coins import RISKY, UNKNOWN, CoinUniverse
+from .exchanges import MarketData, MarketSnapshot, closed_candles, resolve_perp
 from .execution import ExecutionError, LiveBroker, PaperBroker
 from .risk import RiskReject, check_guards, size_fixed, size_position, utc_day_start_ms
 from .storage import Storage, Trade
@@ -36,6 +37,8 @@ COMMANDS = [
     ("devam", "Duraklatmayi kaldir"),
     ("oto", "Otomatik islem: /oto ac | /oto kapat"),
     ("backtest", "Gecmis veride test: /backtest [ETH] [gun]"),
+    ("top30", "24s hacme gore en buyuk 30 coin"),
+    ("meme", "En hacimli 30 meme coin + ag + guvenlik: /meme PEPE ayrinti"),
     ("ayarlar", "Gecerli ayarlar"),
     ("yardim", "Komut listesi"),
 ]
@@ -47,7 +50,7 @@ def now_ms() -> int:
 
 class Engine:
     def __init__(self, cfg: Settings, tg: Optional[Telegram] = None, md: Optional[MarketData] = None,
-                 storage: Optional[Storage] = None, broker: Any = None):
+                 storage: Optional[Storage] = None, broker: Any = None, universe: Optional[CoinUniverse] = None):
         self.cfg = cfg
         self.storage = storage or Storage(cfg.data_dir / "bot.sqlite3")
         self.md = md or MarketData(cfg.data_exchanges)
@@ -59,6 +62,7 @@ class Engine:
             self.broker = LiveBroker(cfg, self.storage)
         else:
             self.broker = PaperBroker(cfg, self.md, self.storage)
+        self.universe = universe or (CoinUniverse(cfg, self.storage) if cfg.coins_enabled else None)
         self.pending: Dict[str, Dict[str, Any]] = {}
         self.pending_close: Dict[str, float] = {}  # tek kullanimlik kapatma onaylari
         self.reconciled = not isinstance(self.broker, LiveBroker)  # paper: uzlastirma gerekmez
@@ -112,10 +116,32 @@ class Engine:
             eq = None
         return check_guards(self.cfg, day, recent, eq, self.paused), eq
 
+    # ------------------------------------------------------------ evren
+    def symbols(self) -> List[str]:
+        """Islem/analiz listesi. SYMBOLS=TOP30: hacim listesinden borsada USDT perpetual'i
+        olanlar (1000PEPE gibi carpanli adlar cozumlenir), 'Riskli' meme coinler haric."""
+        if not self.cfg.auto_symbols or self.universe is None or not self.universe.top:
+            return list(self.cfg.symbols)
+        ex = self.md.swap[self.cfg.exec_exchange]
+        try:
+            self.md._ensure(ex)
+        except Exception as e:  # noqa: BLE001
+            log.warning("markets: %s", e)
+            return list(self.cfg.symbols)
+        out: List[str] = []
+        for c in self.universe.top:
+            found = resolve_perp(ex, c.symbol)
+            if found and found[0] not in out and self.universe.level_of(found[0]) != RISKY:
+                out.append(found[0])
+        return out or list(self.cfg.symbols)
+
     # ------------------------------------------------------------ analysis
-    def analyze_symbol(self, symbol: str, record_oi: bool = False):
+    def analyze_symbol(self, symbol: str, record_oi: bool = False, with_market: bool = True):
         raw = self.md.ohlcv(self.cfg.exec_exchange, symbol, self.cfg.timeframe, limit=max(1000, self.strategy.min_bars + 10))
         candles = closed_candles(raw, self.cfg.timeframe_ms)
+        if not with_market:
+            # Hizli tarama: yalnizca mumlar. Sinyal cikarsa cagiran taraf piyasa verisiyle tekrar degerlendirir.
+            return self.strategy.analyze(symbol, candles, None, None, require_market=False), None, None
         snap: Optional[MarketSnapshot]
         try:
             snap = self.md.snapshot(symbol)
@@ -157,9 +183,11 @@ class Engine:
         cand: List[tuple] = []
         summary: List[str] = []
         bar_close_limit = cfg.timeframe_ms // 4  # mum kapanisindan sonra en fazla 30 dk (2s icin)
-        for sym in cfg.symbols:
+        for sym in self.symbols():
             try:
-                an, snap, oi = self.analyze_symbol(sym, record_oi=True)
+                an, snap, oi = self.analyze_symbol(sym, with_market=False)
+                if an.signal is not None:  # 3 borsa verisi yalnizca sinyal varsa (istek tasarrufu)
+                    an, snap, oi = self.analyze_symbol(sym, record_oi=True)
             except Exception as e:  # noqa: BLE001
                 self.notify_error(f"analiz {sym}", e)
                 continue
@@ -504,16 +532,16 @@ class Engine:
             f"Acik pozisyon: {len(ot)}",
             f"Risk: {'✅ islem acilabilir' if guard.allowed else '⛔ ' + esc(guard.reason)}",
             f"Sonraki analiz: {fmt.ts_str(self.next_cycle_ms)}",
-            f"Semboller: {esc(', '.join(self.cfg.symbols))} · {self.cfg.timeframe}",
+            f"Semboller ({len(self.symbols())}): {esc(', '.join(x.split('/')[0] for x in self.symbols()))} · {self.cfg.timeframe}",
         ]
         day = self.storage.closed_trades(utc_day_start_ms(), mode=self.broker.mode)
         lines.append(f"Bugun: {len(day)} islem, {sum(t.pnl_usdt or 0 for t in day):+.2f} USDT")
         self.notify("\n".join(lines))
 
     def cmd_analiz(self, args):
-        if not args and len(self.cfg.symbols) > 2:
+        if not args and len(self.symbols()) > 2:
             rows = []
-            for sym in self.cfg.symbols:
+            for sym in self.symbols():
                 try:
                     raw = self.md.ohlcv(self.cfg.exec_exchange, sym, self.cfg.timeframe,
                                         limit=max(1000, self.strategy.min_bars + 10))
@@ -523,7 +551,7 @@ class Engine:
                     log.warning("ozet %s: %s", sym, e)
             self.notify(fmt.summary_text(rows, self.cfg.timeframe))
             return
-        syms = [a.upper() if "/" in a else f"{a.upper()}/USDT" for a in args] or self.cfg.symbols
+        syms = [a.upper() if "/" in a else f"{a.upper()}/USDT" for a in args] or self.symbols()
         for sym in syms:
             try:
                 an, snap, oi = self.analyze_symbol(sym)
@@ -576,7 +604,7 @@ class Engine:
     def cmd_backtest(self, args):
         from .backtest import backtest_symbol
 
-        syms = [a.upper() if "/" in a else f"{a.upper()}/USDT" for a in args if not a.isdigit()] or self.cfg.symbols
+        syms = [a.upper() if "/" in a else f"{a.upper()}/USDT" for a in args if not a.isdigit()] or self.symbols()
         days = next((int(a) for a in args if a.isdigit()), 365)
         days = max(30, min(days, 1095))
         self.notify(f"⏳ Backtest: {esc(', '.join(syms))} · {days} gun · {self.cfg.timeframe}. "
@@ -593,6 +621,36 @@ class Engine:
             "komisyon dahil. Funding/OI filtresi gecmise uygulanmaz. Gecmis sonuc gelecegi garanti etmez.</i>",
             silent=True,
         )
+
+    def cmd_top30(self, args):
+        u = self.universe
+        if u is None or not u.top:
+            self.notify("Top liste henuz yuklenmedi (arka planda aliniyor). Biraz sonra tekrar deneyin.")
+            return
+        ex = self.md.swap[self.cfg.exec_exchange]
+        try:
+            self.md._ensure(ex)
+        except Exception:  # noqa: BLE001
+            pass
+        trading = set(self.symbols())
+        self.notify(fmt.top_text(u.top, lambda sym: resolve_perp(ex, sym), trading, u.source_name,
+                                 self.cfg.exec_exchange))
+
+    def cmd_meme(self, args):
+        u = self.universe
+        if u is None or not u.memes:
+            self.notify("Meme listesi henuz yuklenmedi (arka planda aliniyor). Biraz sonra tekrar deneyin.")
+            return
+        if args:
+            q = args[0].upper()
+            m = next((x for x in u.memes if x.symbol == q or x.id == args[0].lower()), None)
+            if m is None:
+                self.notify(f"{esc(q)} en hacimli {len(u.memes)} meme coin listesinde yok.")
+                return
+            self.notify(fmt.meme_detail(m, u.security.get(m.id)))
+            return
+        pending = sum(1 for m in u.memes if m.id not in u.security or u.security[m.id].level == UNKNOWN)
+        self.notify(fmt.meme_text(u.memes, u.security, u.source_name, pending))
 
     def cmd_dur(self, args):
         self.storage.set("paused", True)
@@ -701,7 +759,9 @@ class Engine:
                 startup.append(f"🚨 Borsa baglanti testi BASARISIZ: {esc(e)}")
         else:
             startup.append(f"Paper bakiye: {self.broker.equity():.2f} USDT")
-        startup.append(f"{esc(', '.join(self.cfg.symbols))} · {self.cfg.timeframe} · oto islem {'acik' if self.auto else 'kapali'}")
+        mode_txt = (f"TOP{self.cfg.universe_size} ({esc(self.universe.source_name)})"
+                    if self.cfg.auto_symbols and self.universe else esc(", ".join(self.cfg.symbols)))
+        startup.append(f"{mode_txt} · {self.cfg.timeframe} · oto islem {'acik' if self.auto else 'kapali'}")
         self.notify("\n".join(startup))
         try:
             self.reconcile()
@@ -725,6 +785,8 @@ class Engine:
                     self.monitor()
                 self.expire_pending()
                 self.heartbeat()
+                if self.universe is not None:
+                    self.universe.tick()  # arka planda tek adim (liste/ag/guvenlik taramasi)
             except Exception as e:  # noqa: BLE001
                 self.notify_error("ana dongu", e)
                 time.sleep(5)

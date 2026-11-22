@@ -1,0 +1,68 @@
+[
+{
+"id": "dogecoin",
+"symbol": "doge",
+"name": "Dogecoin",
+"current_price": 0.055128,
+"total_volume": 336617316,
+"price_change_percentage_24h": 0.0657,
+"market_cap_rank": 13,
+"high_24h": 0.055771,
+"low_24h": 0.05372
+},
+{
+"id": "pepe",
+"symbol": "pepe",
+"name": "Pepe",
+"current_price": 3.4e-06,
+"total_volume": 168863713,
+"price_change_percentage_24h": -0.04185,
+"market_cap_rank": 52,
+"high_24h": 3.45e-06,
+"low_24h": 3.31e-06
+},
+{
+"id": "official-trump",
+"symbol": "trump",
+"name": "Official Trump",
+"current_price": 0.893727,
+"total_volume": 79467494,
+"price_change_percentage_24h": 1.93689,
+"market_cap_rank": 135,
+"high_24h": 0.917477,
+"low_24h": 0.872987
+},
+{
+"id": "pudgy-penguins",
+"symbol": "pengu",
+"name": "Pudgy Penguins",
+"current_price": 0.00426322,
+"total_volume": 42870268,
+"price_change_percentage_24h": -1.54389,
+"market_cap_rank": 130,
+"high_24h": 0.00437888,
+"low_24h": 0.0041746
+},
+{
+"id": "shiba-inu",
+"symbol": "shib",
+"name": "Shiba Inu",
+"current_price": 3.6e-06,
+"total_volume": 36062746,
+"price_change_percentage_24h": -0.54298,
+"market_cap_rank": 39,
+"high_24h": 3.66e-06,
+"low_24h": 3.57e-06
+},
+{
+"id": "ape-and-pepe",
+"symbol": "apepe",
+"name": "Ape and Pepe",
+"current_price": 1.41e-06,
+"total_volume": 20122630,
+"price_change_percentage_24h": -4.50237,
+"market_cap_rank": 123,
+"high_24h": 1.55e-06,
+"low_24h": 1.38e-06
+}
+]

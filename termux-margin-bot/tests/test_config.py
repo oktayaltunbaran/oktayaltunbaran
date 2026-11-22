@@ -37,6 +37,12 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(ConfigError):
             load_settings(write(BASE + "LEVERAGE=20\nMAX_SL_PCT=4\n"))  # 20x: liq ~%4.5
 
+    def test_symbols_modes(self):
+        s = load_settings(write(BASE + "SYMBOLS=TOP20\n"))
+        self.assertEqual((s.auto_symbols, s.universe_size), (True, 20))
+        s = load_settings(write(BASE + "SYMBOLS=eth/usdt, sol/usdt\n"))
+        self.assertEqual((s.auto_symbols, s.symbols), (False, ["ETH/USDT", "SOL/USDT"]))
+
     def test_bad_symbol(self):
         with self.assertRaises(ConfigError):
             load_settings(write(BASE + "SYMBOLS=BTCUSDT\n"))
@@ -50,8 +56,9 @@ class TestConfig(unittest.TestCase):
         text = ex.read_text(encoding="utf-8").replace("TELEGRAM_BOT_TOKEN=\n", "").replace("TELEGRAM_CHAT_ID=\n", "")
         s = load_settings(write(BASE + text))
         self.assertEqual((s.margin_usdt, s.leverage, s.timeframe), (30.0, 5, "2h"))
-        self.assertEqual(len(s.symbols), 9)
-        self.assertNotIn("BTC/USDT", s.symbols)  # 30 USDT'de asgari tutara takilir
+        self.assertTrue(s.auto_symbols)  # SYMBOLS=TOP30
+        self.assertEqual((s.universe_size, s.meme_count), (30, 30))
+        self.assertIn("BTC/USDT", s.symbols)  # yedek liste (150$ nominal BTC asgarisini karsilar)
         # 4 yillik testte secilen degerler
         self.assertEqual((s.strategy, s.st_len, s.st_mult, s.st_stop_atr), ("supertrend", 10, 3.0, 1.0))
         self.assertEqual((s.risk_mode, s.fixed_margin_usdt, s.leverage, s.tp_roi_pct, s.sl_loss_usdt),
