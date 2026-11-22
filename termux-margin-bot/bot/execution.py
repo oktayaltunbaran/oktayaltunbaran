@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+import secrets
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import ccxt
@@ -58,6 +59,7 @@ class PositionStatus:
     exit_price: Optional[float] = None
     exit_reason: Optional[str] = None
     fees: Optional[float] = None
+    notes: List[str] = field(default_factory=list)  # kullaniciya bildirilecek olaylar
 
 
 def _market_info(ex: ccxt.Exchange, symbol: str) -> MarketInfo:
@@ -190,6 +192,15 @@ _BENIGN = (
     "110043",
     "59000",  # okx: ayar zaten ayni / degistirilemez durumda
 )
+
+
+_IMMEDIATE = ("-2021", "immediately trigger", "110092", "110093", "51277", "51278", "51279")
+
+
+def _immediate_trigger(e: Exception) -> bool:
+    """Stop/hedef fiyati zaten gecilmis: emir 'hemen tetiklenir' diye reddedildi."""
+    s = str(e).lower()
+    return any(x in s for x in _IMMEDIATE)
 
 
 def _benign(e: Exception) -> bool:
@@ -366,8 +377,18 @@ class LiveBroker:
         self.cleanup_orders(psym)  # eski yetim tetik emirleri
 
         order_side = "buy" if side == "long" else "sell"
-        order = self.ex.create_order(psym, "market", order_side, plan.qty, None, self._order_params())
-        log.info("Giris emri: %s %s %s qty=%s id=%s", self.exname, psym, order_side, plan.qty, order.get("id"))
+        cid = "mb" + secrets.token_hex(8)  # izlenebilir, borsaya ozgu sinirlara uygun (<=32 alfanumerik)
+        try:
+            order = self.ex.create_order(psym, "market", order_side, plan.qty, None,
+                                         self._order_params({"clientOrderId": cid}))
+        except (ccxt.NetworkError, ccxt.RequestTimeout) as e:
+            # Emir borsaya ulasmis olabilir: KORUMASIZ pozisyon birakmamak icin pozisyonu ara,
+            # ASLA kor bir sekilde yeniden gonderme (cift giris riski).
+            log.error("Giris emrinde ag hatasi (%s); pozisyon kontrol ediliyor (cid=%s)", e, cid)
+            order = {"id": None, "clientOrderId": cid}
+            if not any(self._fetch_position(psym, side) is not None for _ in self._retry_sleep(6, 1.5)):
+                raise ExecutionError(f"Giris emri belirsiz sonuclandi ve pozisyon bulunamadi ({cid}). Borsayi kontrol edin.") from e
+        log.info("Giris emri: %s %s %s qty=%s id=%s cid=%s", self.exname, psym, order_side, plan.qty, order.get("id"), cid)
 
         pos = None
         for _ in range(8):
@@ -408,6 +429,8 @@ class LiveBroker:
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 log.error("SL denemesi %d basarisiz: %s", attempt + 1, e)
+                if _immediate_trigger(e):
+                    break  # fiyat stopu zaten gecti: beklemeden kapat
                 time.sleep(1.5)
         if sl_id is None:
             self._emergency_close(psym, side, qty)
@@ -422,6 +445,12 @@ class LiveBroker:
 
         return {"entry": entry, "qty": qty, "sl": sl, "tp": tp, "liq": liq, "sl_order_id": sl_id, "tp_order_id": tp_id}
 
+    @staticmethod
+    def _retry_sleep(n: int, delay: float):
+        for _ in range(n):
+            time.sleep(delay)
+            yield None
+
     def _emergency_close(self, psym: str, side: str, qty: float) -> None:
         try:
             self._market_close(psym, side, qty)
@@ -434,19 +463,108 @@ class LiveBroker:
         psym = perp_symbol(t.symbol)
         pos = self._fetch_position(psym, t.side)
         if pos is not None:
-            if t.tp > 0 and not t.tp_order_id:  # TP eksikse tekrar dene
-                try:
-                    t.tp_order_id = self._place_tp(psym, t.side, float(pos["contracts"]), t.tp)
-                except Exception as e:  # noqa: BLE001
-                    log.warning("TP tekrar denemesi: %s", e)
+            notes: List[str] = []
+            now = time.time()
+            if now - float(t.meta.get("guard_ts", 0)) >= self.guard_interval_sec:
+                t.meta["guard_ts"] = now
+                closed = self._ensure_protection(t, pos, notes)
+                if closed is not None:
+                    closed.notes = notes
+                    return closed
             mark = pos.get("markPrice")
-            return PositionStatus(True, mark=float(mark) if mark else None)
+            return PositionStatus(True, mark=float(mark) if mark else None, notes=notes)
         # Pozisyon kapanmis -> cikis fiyatini islemlerden bul
         exit_px, fees = self._exit_from_fills(psym, t)
         self.cleanup_orders(psym)
         if exit_px is None:
             exit_px = self.last_price(t.symbol)
         return PositionStatus(False, exit_price=exit_px, exit_reason=_exit_reason(t, exit_px), fees=fees)
+
+    guard_interval_sec = 60
+
+    @staticmethod
+    def _order_trigger(o: Dict[str, Any]) -> Optional[float]:
+        for k in ("stopLossPrice", "takeProfitPrice", "triggerPrice", "stopPrice"):
+            v = o.get(k)
+            if v:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+    def _open_triggers(self, psym: str) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"trigger": True}
+        if self.exname == "okx":
+            params["ordType"] = "conditional"
+        return self.ex.fetch_open_orders(psym, None, None, params)
+
+    def _ensure_protection(self, t: Trade, pos: Dict[str, Any], notes: List[str]) -> Optional[PositionStatus]:
+        """Stop bekcisi (Freqtrade stoploss_on_exchange benzeri): borsada SL (ve varsa TP)
+        emri duruyor mu? Yoksa/yanlissa yeniden kur; SL kurulamiyorsa pozisyonu kapat.
+        Emir listesi alinamazsa HICBIR sey yapma (eksik veri = 'emir yok' demek degildir)."""
+        psym = perp_symbol(t.symbol)
+        try:
+            orders = self._open_triggers(psym)
+        except Exception as e:  # noqa: BLE001
+            log.warning("stop bekcisi: emirler okunamadi (%s); bu tur atlandi", e)
+            return None
+        qty = float(pos["contracts"])
+        by_id = {str(o.get("id")): o for o in orders}
+
+        def _find(order_id: Optional[str], price: float) -> Optional[str]:
+            if order_id and str(order_id) in by_id:
+                return str(order_id)
+            for o in orders:  # kimlik degismis olabilir (or. elle yeniden kuruldu): fiyata gore eslestir
+                trig = self._order_trigger(o)
+                if trig and abs(trig - price) <= price * 0.001:
+                    return str(o.get("id"))
+            return None
+
+        sl_id = _find(t.sl_order_id, t.sl)
+        if sl_id is not None:
+            t.sl_order_id = sl_id
+        else:
+            placed, last = False, None
+            for _ in range(2):
+                try:
+                    t.sl_order_id = self._place_stop(psym, t.side, qty, t.sl)
+                    placed = True
+                    notes.append(f"🛡 {t.symbol}: borsada stop bulunamadi, yeniden kuruldu ({t.sl:.6g})")
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last = e
+                    if _immediate_trigger(e):
+                        break
+                    time.sleep(1.0)
+            if not placed:
+                self._emergency_close(psym, t.side, qty)
+                exit_px, fees = self._exit_from_fills(psym, t)
+                notes.append(f"🚨 {t.symbol}: stop kurulamadi ({last}); pozisyon piyasadan KAPATILDI")
+                return PositionStatus(False, exit_price=exit_px or self.last_price(t.symbol),
+                                      exit_reason="KORUMA", fees=fees)
+        if t.tp > 0 and _find(t.tp_order_id, t.tp) is None:
+            try:
+                t.tp_order_id = self._place_tp(psym, t.side, qty, t.tp)
+                notes.append(f"🎯 {t.symbol}: hedef emri yeniden kuruldu ({t.tp:.6g})")
+            except Exception as e:  # noqa: BLE001
+                if _immediate_trigger(e):  # fiyat hedefi zaten gecti -> kar al
+                    self._market_close(psym, t.side, qty)
+                    self.cleanup_orders(psym)
+                    exit_px, fees = self._exit_from_fills(psym, t)
+                    return PositionStatus(False, exit_price=exit_px or self.last_price(t.symbol),
+                                          exit_reason="TP", fees=fees)
+                log.warning("TP yeniden kurulamadi: %s", e)
+        return None
+
+    def all_positions(self) -> List[Dict[str, Any]]:
+        """Hesaptaki TUM acik pozisyonlar (uzlastirma icin). Hata -> istisna (asla bos liste varsayma)."""
+        out = []
+        for p in self.ex.fetch_positions():
+            c = float(p.get("contracts") or 0.0)
+            if c > 0 and p.get("symbol"):
+                out.append({"symbol": p["symbol"].split(":")[0], "side": p.get("side"), "contracts": c})
+        return out
 
     def _exit_from_fills(self, psym: str, t: Trade):
         close_side = "sell" if t.side == "long" else "buy"

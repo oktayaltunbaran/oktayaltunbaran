@@ -25,10 +25,40 @@ def _secrets(cfg):
     register_secrets(vals)
 
 
+_LOCK = None
+
+
+def acquire_lock(path) -> bool:
+    """Tek ornek kilidi (Passivbot ilkesi): Termux:Boot servisi ve elle baslatilan ikinci
+    kopya ayni hesapta cakismasin. Isletim sistemi kilidi surec olunce kendiliginden kalkar."""
+    import fcntl
+
+    global _LOCK
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "a+")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return False
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    _LOCK = fh
+    return True
+
+
 def cmd_run() -> int:
     cfg = load_settings()
     setup_logging(cfg.data_dir / "logs")
     _secrets(cfg)
+    if not acquire_lock(cfg.data_dir / "bot.lock"):
+        print("HATA: Bot zaten calisiyor (data/bot.lock kilitli). Ikinci kopya baslatilmadi.\n"
+              "Servis kuruluysa: sv status marginbot")
+        if os.environ.get("BOT_SUPERVISED"):
+            time.sleep(60)
+        return 4
     from .engine import Engine
 
     log = logging.getLogger("bot")

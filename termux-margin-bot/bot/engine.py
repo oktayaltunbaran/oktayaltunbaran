@@ -13,9 +13,11 @@ import signal as _signal
 import time
 from typing import Any, Dict, List, Optional
 
+import ccxt
+
 from . import fmt
 from .config import Settings
-from .exchanges import MarketData, MarketSnapshot, closed_candles, perp_symbol
+from .exchanges import MarketData, MarketSnapshot, closed_candles
 from .execution import ExecutionError, LiveBroker, PaperBroker
 from .risk import RiskReject, check_guards, size_fixed, size_position, utc_day_start_ms
 from .storage import Storage, Trade
@@ -58,6 +60,10 @@ class Engine:
         else:
             self.broker = PaperBroker(cfg, self.md, self.storage)
         self.pending: Dict[str, Dict[str, Any]] = {}
+        self.pending_close: Dict[str, float] = {}  # tek kullanimlik kapatma onaylari
+        self.reconciled = not isinstance(self.broker, LiveBroker)  # paper: uzlastirma gerekmez
+        self._last_reconcile_try = 0.0
+        self._last_auth_notice = 0.0
         self.running = True
         self.next_cycle_ms = 0
         self.last_monitor = 0.0
@@ -77,6 +83,14 @@ class Engine:
 
     def notify_error(self, where: str, e: Exception) -> None:
         log.exception("%s: %s", where, e)
+        if isinstance(e, (ccxt.AuthenticationError, ccxt.PermissionDenied, ccxt.AccountSuspended)):
+            if time.time() - self._last_auth_notice > 3600:
+                self._last_auth_notice = time.time()
+                self.notify("🔑 <b>API anahtari reddedildi</b> "
+                            f"({esc(where)}): anahtar silinmis, suresi dolmus (IP kisitlamasiz anahtarlar "
+                            "14-90 gunde gecersizlesebilir) veya izinleri degismis olabilir. Yeni islem acilamaz; "
+                            "acik pozisyonlarin stoplari borsada durur. Anahtari yenileyip .env'yi guncelleyin.")
+            return
         if time.time() - self._last_err_notice > 600:  # en fazla 10 dk'da bir
             self._last_err_notice = time.time()
             self.notify(f"⚠️ <b>Hata</b> ({esc(where)}): <code>{esc(type(e).__name__)}: {esc(str(e)[:300])}</code>")
@@ -177,6 +191,12 @@ class Engine:
             self.notify("🕑 <b>2s mum kapanisi</b>\n" + "\n".join(summary), silent=True)
         if not cand:
             return
+        if not self.reconciled:
+            self.notify("⏸ Sinyal atlandi: borsa ile uzlastirma henuz basarili olmadi (guvenli tarafta kaliniyor).",
+                        silent=True)
+            return
+        blocked = set(self.storage.get("blocked_symbols", []))
+        cand = [x for x in cand if x[0].symbol not in blocked]
         open_now = [t for t in self.storage.open_trades() if t.mode == self.broker.mode]
         held = {t.symbol for t in open_now}
         slots = self.cfg.max_open_positions - len(open_now)
@@ -345,6 +365,8 @@ class Engine:
             except Exception as e:  # noqa: BLE001
                 self.notify_error(f"izleme {t.symbol}", e)
                 continue
+            for n in st.notes:
+                self.notify(esc(n))
             if not st.open:
                 self.finalize(t, st.exit_price, st.exit_reason or "?")
                 continue
@@ -430,7 +452,11 @@ class Engine:
     def on_callback(self, cq: Dict[str, Any]) -> None:
         data = cq.get("data") or ""
         action, _, pid = data.partition(":")
-        if action == "close" and pid == "confirm":
+        if action == "close":
+            created = self.pending_close.pop(pid, None)
+            if created is None or time.time() - created > 60:
+                self.tg.answer_callback(cq["id"], "Bu onay gecersiz veya suresi dolmus; /kapat ile tekrar isteyin")
+                return
             self.tg.answer_callback(cq["id"], "Kapatiliyor…")
             self._close_open()
             return
@@ -529,8 +555,10 @@ class Engine:
         if not self.storage.open_trades():
             self.notify("Acik pozisyon yok.")
             return
-        self.notify("Acik pozisyon piyasa fiyatindan kapatilsin mi?",
-                    buttons=[[{"text": "⚠️ Evet, kapat", "callback_data": "close:confirm"}]])
+        nonce = secrets.token_hex(4)
+        self.pending_close = {nonce: time.time()}  # yalnizca en son onay gecerli
+        self.notify("Acik pozisyon(lar) piyasa fiyatindan kapatilsin mi? (60 sn gecerli)",
+                    buttons=[[{"text": "⚠️ Evet, kapat", "callback_data": f"close:{nonce}"}]])
 
     def _close_open(self):
         for t in self.storage.open_trades():
@@ -604,22 +632,58 @@ class Engine:
         ]))
 
     # ------------------------------------------------------------ lifecycle
-    def reconcile(self) -> None:
-        """Acilista: DB ile borsa durumunu esitle."""
+    def reconcile(self) -> bool:
+        """Acilista (ve basarisizsa her dakika) DB ile borsa durumunu esitle.
+        NautilusTrader ilkesi: emin olunamiyorsa yeni islem ACMA (fail closed);
+        borsadan veri alinamamasi 'pozisyon yok' anlamina gelmez."""
         if not isinstance(self.broker, LiveBroker):
+            self.reconciled = True
+            return True
+        self._last_reconcile_try = time.time()
+        try:
+            positions = self.broker.all_positions()
+        except Exception as e:  # noqa: BLE001
+            self.reconciled = False
+            self.notify_error("uzlastirma", e)
+            return False
+        known = {(t.symbol, t.side) for t in self.storage.open_trades() if t.mode == "live"}
+        on_ex = {(p["symbol"], p["side"]) for p in positions}
+        unknown = sorted(on_ex - known)
+        blocked = sorted({sym for sym, _ in unknown})
+        previous = set(self.storage.get("blocked_symbols", []))
+        self.storage.set("blocked_symbols", blocked)
+        for sym, side in unknown:
+            if sym not in previous:  # yalnizca YENI durumlar bildirilir
+                self.notify(f"⚠️ Borsada botun bilmedigi bir {esc(side)} {esc(sym)} pozisyonu var. "
+                            "Bot ona dokunmaz; bu coinde yeni islem acilmaz (kilit, pozisyon kapaninca kalkar).")
+        for sym in sorted(previous - set(blocked)):
+            self.notify(f"✅ {esc(sym)} kilidi kalkti (bilinmeyen pozisyon kapanmis).", silent=True)
+        first = not self.reconciled
+        self.reconciled = True
+        if first:
+            self.monitor()  # DB'de acik ama borsada kapanmis olanlari isler, stop bekcisi calisir
+        return True
+
+    def heartbeat(self) -> None:
+        """Her UTC gunu bir kez 'bot calisiyor' ozeti. Gelmezse bot durmus demektir."""
+        day = utc_day_start_ms()
+        if self.storage.get("heartbeat_day") == day:
             return
-        known = {t.symbol for t in self.storage.open_trades()}
-        for sym in self.cfg.symbols:
-            try:
-                psym = perp_symbol(sym)
-                for side in ("long", "short"):
-                    pos = self.broker._fetch_position(psym, side)
-                    if pos is not None and sym not in known:
-                        self.notify(f"⚠️ Borsada botun bilmedigi bir {side} {esc(sym)} pozisyonu var. "
-                                    f"Bot buna dokunmaz; elle yonetin. Bu sembolde yeni islem acilmaz.")
-            except Exception as e:  # noqa: BLE001
-                log.warning("reconcile %s: %s", sym, e)
-        self.monitor()  # DB'de acik ama borsada kapanmis olanlari kapatir
+        self.storage.set("heartbeat_day", day)
+        prev = self.storage.closed_trades(day - 86_400_000, mode=self.broker.mode)
+        prev = [t for t in prev if (t.closed_at or 0) < day]
+        try:
+            eq = self.broker.equity()
+        except Exception:  # noqa: BLE001
+            eq = None
+        ot = [t for t in self.storage.open_trades() if t.mode == self.broker.mode]
+        self.notify(
+            f"💓 Bot calisiyor · {self.broker.mode.upper()} · bakiye "
+            + (f"{eq:.2f}" if eq is not None else "?")
+            + f" USDT · acik pozisyon {len(ot)} · dun {len(prev)} islem, "
+            f"{sum(t.pnl_usdt or 0 for t in prev):+.2f} USDT",
+            silent=True,
+        )
 
     def stop(self, *_):
         self.running = False
@@ -653,10 +717,14 @@ class Engine:
                 if now_ms() >= self.next_cycle_ms:
                     self.next_cycle_ms = self.compute_next_cycle()
                     self.run_cycle()
+                since = time.time() - self._last_reconcile_try
+                if (not self.reconciled and since >= 60) or since >= 900:  # basarisizsa 1 dk, sonra 15 dk'da bir
+                    self.reconcile()
                 if time.time() - self.last_monitor >= self.cfg.monitor_interval_sec:
                     self.last_monitor = time.time()
                     self.monitor()
                 self.expire_pending()
+                self.heartbeat()
             except Exception as e:  # noqa: BLE001
                 self.notify_error("ana dongu", e)
                 time.sleep(5)

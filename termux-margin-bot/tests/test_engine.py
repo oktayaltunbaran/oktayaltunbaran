@@ -191,10 +191,31 @@ class TestEngineFlow(unittest.TestCase):
         h = Harness(auto=True)
         h.eng.run_cycle()
         h.cmd("/kapat")
-        self.assertEqual(h.tg.sent[-1]["buttons"][0][0]["callback_data"], "close:confirm")
-        h.press("close:confirm")
+        data = h.tg.sent[-1]["buttons"][0][0]["callback_data"]
+        self.assertTrue(data.startswith("close:") and data != "close:confirm")
+        h.press("close:confirm")  # eski/sahte onay reddedilir
+        self.assertEqual(len(h.st.open_trades()), 1)
+        h.press(data)
         self.assertEqual(h.st.open_trades(), [])
         self.assertEqual(h.st.closed_trades()[0].exit_reason, "MANUEL")
+        h.press(data)  # ikinci basis: tek kullanimlik
+        self.assertIn("gecersiz", h.tg.answers[-1][1])
+
+    def test_close_confirm_expires(self):
+        h = Harness(auto=True)
+        h.eng.run_cycle()
+        h.cmd("/kapat")
+        data = h.tg.sent[-1]["buttons"][0][0]["callback_data"]
+        nonce = data.split(":")[1]
+        h.eng.pending_close[nonce] -= 61
+        h.press(data)
+        self.assertEqual(len(h.st.open_trades()), 1)
+
+    def test_heartbeat_once_per_day(self):
+        h = Harness()
+        h.eng.heartbeat()
+        h.eng.heartbeat()
+        self.assertEqual(sum("Bot calisiyor" in m["text"] for m in h.tg.sent), 1)
 
     def test_time_stop(self):
         h = Harness(auto=True, max_hold_candles=1)
