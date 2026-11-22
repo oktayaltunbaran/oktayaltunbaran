@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 from .config import Settings
-from .risk import RiskReject, realized_pnl, size_position
+from .risk import RiskReject, realized_pnl, size_fixed, size_position
 from .strategy import Strategy
 
 
@@ -113,12 +113,16 @@ def run_backtest(
             sl = entry - d * s.sl_dist
             tp = 0.0 if cfg.trailing else entry + d * s.sl_dist * cfg.tp_r_mult
             try:
-                plan = size_position(cfg, s.side, entry, sl, tp, contract_size, a2p, min_amount, min_cost, equity)
+                if cfg.fixed:
+                    plan = size_fixed(cfg, s.side, entry, contract_size, a2p, min_amount, min_cost, equity)
+                    sl, tp = plan.sl, plan.tp
+                else:
+                    plan = size_position(cfg, s.side, entry, sl, tp, contract_size, a2p, min_amount, min_cost, equity)
             except RiskReject:
                 rejected += 1
                 i += 1
                 continue
-            pos = BTTrade(s.side, nxt[0], entry, sl, tp, plan.base_qty, r=s.sl_dist, initial_sl=sl)
+            pos = BTTrade(s.side, nxt[0], entry, sl, tp, plan.base_qty, r=abs(entry - sl), initial_sl=sl)
             be_armed = False
             be_pending = False
             entry_idx = i + 1
@@ -164,9 +168,9 @@ def run_backtest(
                 exit_px, reason = pos.sl * (1 + cfg.slippage_pct / 100), "BE" if be_armed else "SL"
             elif lo <= pos.tp:
                 exit_px, reason = pos.tp, "TP"
-        if exit_px is None and cfg.max_hold_candles > 0 and i - entry_idx + 1 >= cfg.max_hold_candles:
+        if exit_px is None and not cfg.fixed and cfg.max_hold_candles > 0 and i - entry_idx + 1 >= cfg.max_hold_candles:
             exit_px, reason = cl, "ZAMAN"
-        if exit_px is None and cfg.breakeven_at_r > 0 and not be_armed:
+        if exit_px is None and not cfg.fixed and cfg.breakeven_at_r > 0 and not be_armed:
             r = pos.r
             fav = (hi - pos.entry) if pos.side == "long" else (pos.entry - lo)
             if r > 0 and fav / r >= cfg.breakeven_at_r:

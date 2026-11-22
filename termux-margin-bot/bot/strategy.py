@@ -237,7 +237,7 @@ class Strategy:
         sl_dist = max(abs(close - sl), 0.5 * ai, close * c.min_sl_pct / 100)
         sl_pct = sl_dist / close * 100
         if flipped and ema_ok and not an.blocks:
-            if sl_pct > c.max_sl_pct:
+            if sl_pct > c.max_sl_pct and not c.fixed:  # sabit semada stop ST'den bagimsiz
                 an.blocks.append(f"Stop %{sl_pct:.2f} > max %{c.max_sl_pct:g} (volatilite cok yuksek)")
             else:
                 d = 1 if long_ else -1

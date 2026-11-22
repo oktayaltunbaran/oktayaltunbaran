@@ -76,6 +76,7 @@ def settings(**kw) -> Settings:
     s.telegram_chat_id = 42
     s.data_dir = Path(tempfile.mkdtemp())
     s.strategy = "pullback"  # eski testler pullback icin yazildi; supertrend testleri acikca secer
+    s.risk_mode = "risk"  # eski testler risk bazli boyutlama icin; sabit sema testleri acikca secer
     s.max_sl_pct = 4.0
     s.risk_per_trade_usdt = 1.5
     s.max_daily_loss_usdt = 4.5

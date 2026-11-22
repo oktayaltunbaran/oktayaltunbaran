@@ -93,11 +93,18 @@ class Settings:
     cycle_report: bool = False  # her 2s mumda kisa ozet gonder
 
     # Sermaye ve risk
+    # risk_mode: "fixed" -> her islem FIXED_MARGIN_USDT x LEVERAGE nominal, stop = SL_LOSS_USDT
+    #            net zarar, hedef = TP_ROI_PCT net kar (marjine gore). Kullanici tercihi.
+    #            "risk"  -> nominal stop mesafesinden hesaplanir (RISK_PER_TRADE_USDT).
+    risk_mode: str = "fixed"
+    fixed_margin_usdt: float = 30.0
+    tp_roi_pct: float = 25.0
+    sl_loss_usdt: float = 2.5
     margin_usdt: float = 30.0
     leverage: int = 5
     risk_per_trade_usdt: float = 1.0
-    max_open_positions: int = 3
-    max_daily_loss_usdt: float = 3.0
+    max_open_positions: int = 1
+    max_daily_loss_usdt: float = 5.0
     max_consecutive_losses: int = 6
     min_equity_usdt: float = 20.0
     paper_start_equity: float = 30.0
@@ -153,7 +160,20 @@ class Settings:
     @property
     def trailing(self) -> bool:
         """True: sabit hedef (TP) yok; cikis Supertrend donusu + iz suren stop."""
-        return self.strategy == "supertrend"
+        return self.strategy == "supertrend" and self.risk_mode != "fixed"
+
+    @property
+    def fixed(self) -> bool:
+        return self.risk_mode == "fixed"
+
+    def fixed_fracs(self) -> tuple:
+        """(stop_fiyat_orani, hedef_fiyat_orani) — komisyon+kayma dahil NET degerlere gore.
+        stop: net zarar = SL_LOSS_USDT ; hedef: net kar = marjin * TP_ROI_PCT/100."""
+        notional = self.fixed_margin_usdt * self.leverage
+        cost = notional * (2 * self.fee_rate + self.slippage_pct / 100)
+        sl = (self.sl_loss_usdt - cost) / notional
+        tp = (self.fixed_margin_usdt * self.tp_roi_pct / 100 + cost) / notional
+        return sl, tp
 
     @property
     def is_live(self) -> bool:
@@ -195,9 +215,21 @@ class Settings:
             errs.append("RISK_PER_TRADE_USDT > 0 olmali")
         if self.risk_per_trade_usdt > self.margin_usdt:
             errs.append("RISK_PER_TRADE_USDT, MARGIN_USDT'den buyuk olamaz")
+        if self.risk_mode not in ("fixed", "risk"):
+            errs.append("RISK_MODE fixed veya risk olmali")
+        if self.risk_mode == "fixed":
+            slf, tpf = self.fixed_fracs()
+            if slf <= 0:
+                errs.append("SL_LOSS_USDT komisyon+kaymadan buyuk olmali")
+            elif slf * 100 >= 0.7 * (100.0 / self.leverage - self.maint_margin_rate * 100):
+                errs.append("SL_LOSS_USDT likidasyona cok yakin bir stop uretiyor")
+            if self.tp_roi_pct <= 0:
+                errs.append("TP_ROI_PCT > 0 olmali")
+            if self.fixed_margin_usdt <= 0:
+                errs.append("FIXED_MARGIN_USDT > 0 olmali")
         if not (1 <= self.max_open_positions <= 5):
             errs.append("MAX_OPEN_POSITIONS 1..5 olmali")
-        if self.max_daily_loss_usdt < self.risk_per_trade_usdt:
+        if self.max_daily_loss_usdt < (self.sl_loss_usdt if self.risk_mode == "fixed" else self.risk_per_trade_usdt):
             errs.append("MAX_DAILY_LOSS_USDT en az RISK_PER_TRADE_USDT kadar olmali")
         if not (0 < self.min_sl_pct < self.max_sl_pct):
             errs.append("0 < MIN_SL_PCT < MAX_SL_PCT olmali")
@@ -249,6 +281,9 @@ _FLOAT_FIELDS = {
     "MAX_PRICE_DIVERGENCE_PCT": "max_price_divergence_pct",
     "MAX_BASIS_PCT": "max_basis_pct",
     "ST_MULT": "st_mult",
+    "FIXED_MARGIN_USDT": "fixed_margin_usdt",
+    "TP_ROI_PCT": "tp_roi_pct",
+    "SL_LOSS_USDT": "sl_loss_usdt",
     "ST_STOP_ATR": "st_stop_atr",
 }
 _INT_FIELDS = {
@@ -290,6 +325,7 @@ def load_settings(env_path: Optional[Path] = None, validate: bool = True) -> Set
         s.exec_exchange = raw.get("EXEC_EXCHANGE", s.exec_exchange).strip().lower()
         s.timeframe = raw.get("TIMEFRAME", s.timeframe).strip()
         s.strategy = raw.get("STRATEGY", s.strategy).strip().lower()
+        s.risk_mode = raw.get("RISK_MODE", s.risk_mode).strip().lower()
         if raw.get("DATA_EXCHANGES"):
             s.data_exchanges = [x.strip().lower() for x in raw["DATA_EXCHANGES"].split(",") if x.strip()]
         if raw.get("SYMBOLS"):
@@ -322,7 +358,7 @@ def load_settings(env_path: Optional[Path] = None, validate: bool = True) -> Set
 
 def _known_keys() -> set:
     keys = set(_FLOAT_FIELDS) | set(_INT_FIELDS) | set(_BOOL_FIELDS)
-    keys |= {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "MODE", "EXEC_EXCHANGE", "TIMEFRAME", "SYMBOLS", "DATA_DIR", "DATA_EXCHANGES", "STRATEGY"}
+    keys |= {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "MODE", "EXEC_EXCHANGE", "TIMEFRAME", "SYMBOLS", "DATA_DIR", "DATA_EXCHANGES", "STRATEGY", "RISK_MODE"}
     for ex in SUPPORTED_EXCHANGES:
         p = ex.upper()
         keys |= {f"{p}_API_KEY", f"{p}_API_SECRET", f"{p}_API_PASSWORD"}

@@ -128,7 +128,10 @@ def signal_text(
         f"Stop   <code>{px(plan.sl)}</code>  ({pct(sl_pct)})",
     ]
     if plan.tp > 0:
-        lines.append(f"Hedef  <code>{px(plan.tp)}</code>  ({pct(tp_pct)})  R:R 1:{cfg.tp_r_mult:g}")
+        rr = abs(plan.tp - plan.entry) / abs(plan.entry - plan.sl)
+        lines.append(f"Hedef  <code>{px(plan.tp)}</code>  ({pct(tp_pct)})  R:R 1:{rr:.1f}")
+        if cfg.fixed:
+            lines.append(f"Sabit sema: hedefte +%{cfg.tp_roi_pct:g} ROI · stopta -{cfg.sl_loss_usdt:g}$ (net)")
     else:
         lines += [
             "Stop takibi: her 2s kapanista Supertrend cizgisine (lehte) tasinir",

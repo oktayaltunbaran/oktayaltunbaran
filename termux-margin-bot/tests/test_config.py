@@ -54,8 +54,10 @@ class TestConfig(unittest.TestCase):
         self.assertNotIn("BTC/USDT", s.symbols)  # 30 USDT'de asgari tutara takilir
         # 4 yillik testte secilen degerler
         self.assertEqual((s.strategy, s.st_len, s.st_mult, s.st_stop_atr), ("supertrend", 10, 3.0, 1.0))
-        self.assertEqual((s.risk_per_trade_usdt, s.max_open_positions, s.max_sl_pct), (1.0, 3, 6.0))
-        self.assertTrue(s.trailing)
+        self.assertEqual((s.risk_mode, s.fixed_margin_usdt, s.leverage, s.tp_roi_pct, s.sl_loss_usdt),
+                         ("fixed", 30.0, 5, 25.0, 2.5))
+        self.assertEqual((s.max_open_positions, s.max_daily_loss_usdt), (1, 5.0))
+        self.assertFalse(s.trailing)  # sabit semada hedef var
 
 
 if __name__ == "__main__":

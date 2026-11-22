@@ -17,7 +17,7 @@ from . import fmt
 from .config import Settings
 from .exchanges import MarketData, MarketSnapshot, closed_candles, perp_symbol
 from .execution import ExecutionError, LiveBroker, PaperBroker
-from .risk import RiskReject, check_guards, size_position, utc_day_start_ms
+from .risk import RiskReject, check_guards, size_fixed, size_position, utc_day_start_ms
 from .storage import Storage, Trade
 from .strategy import Analysis, Strategy
 from .telegram_api import Telegram, esc
@@ -130,6 +130,9 @@ class Engine:
         except Exception as e:  # noqa: BLE001
             log.warning("free_balance: %s", e)
             free = None
+        if self.cfg.fixed:
+            return size_fixed(self.cfg, side, price, mi.contract_size, mi.amount_to_precision,
+                              mi.min_amount, mi.min_cost, free)
         return size_position(
             self.cfg, side, price, sl, tp, mi.contract_size, mi.amount_to_precision, mi.min_amount, mi.min_cost, free
         )
@@ -287,8 +290,12 @@ class Engine:
             if drift_r < -0.5:
                 raise RiskReject(f"Fiyat sinyalden bu yana aleyhte {drift_r:.2f}R gitti; kurulum bozuldu")
             plan = self.plan_for(s.symbol, s.side, s.sl_dist, entry=price)
-            tp_dist = 0.0 if self.cfg.trailing else s.sl_dist * self.cfg.tp_r_mult
-            res = self.broker.open_position(s.symbol, s.side, plan, s.sl_dist, tp_dist)
+            if self.cfg.fixed:
+                sl_dist, tp_dist = abs(plan.entry - plan.sl), abs(plan.tp - plan.entry)
+            else:
+                sl_dist = s.sl_dist
+                tp_dist = 0.0 if self.cfg.trailing else s.sl_dist * self.cfg.tp_r_mult
+            res = self.broker.open_position(s.symbol, s.side, plan, sl_dist, tp_dist)
         except RiskReject as e:
             self.notify(f"⛔ Islem acilmadi: {esc(e)}")
             return None
@@ -321,7 +328,7 @@ class Engine:
             sl_order_id=res.get("sl_order_id"),
             tp_order_id=res.get("tp_order_id"),
             meta={"signal_close": s.entry_ref, "atr": s.atr, "adx": an.adx, "rsi": an.rsi,
-                  "strategy": self.cfg.strategy},
+                  "strategy": self.cfg.strategy, "risk_mode": self.cfg.risk_mode},
         )
         self.storage.insert_trade(t)
         self.storage.log_signal(s.symbol, s.side, "opened", {"trade_id": t.id})
@@ -342,6 +349,9 @@ class Engine:
                 self.finalize(t, st.exit_price, st.exit_reason or "?")
                 continue
             if t.tp <= 0:  # iz suren (supertrend) islem: stop/cikis mum kapanisinda yonetilir
+                self.storage.update_trade(t)
+                continue
+            if t.meta.get("risk_mode") == "fixed":  # sabit sema: yalnizca borsadaki SL/TP
                 self.storage.update_trade(t)
                 continue
             # Breakeven: fiyat +BREAKEVEN_AT_R lehte gidince stop giris(+komisyon)'a
@@ -582,7 +592,10 @@ class Engine:
             f"Marjin {c.margin_usdt:g} USDT · Kaldirac {c.leverage}x · Max nominal {c.max_notional_usdt:g}",
             f"Islem basi risk {c.risk_per_trade_usdt:g} · Gunluk max kayip {c.max_daily_loss_usdt:g}",
             f"Ust uste kayip limiti {c.max_consecutive_losses} · Min bakiye {c.min_equity_usdt:g}",
-            f"Strateji: <b>{c.strategy}</b>",
+            f"Strateji: <b>{c.strategy}</b> · risk modu: <b>{c.risk_mode}</b>",
+            (f"Sabit sema: {c.fixed_margin_usdt:g}$ x {c.leverage} = {c.fixed_margin_usdt * c.leverage:g}$ nominal · "
+             f"hedef +%{c.tp_roi_pct:g} ROI (~{c.fixed_margin_usdt * c.tp_roi_pct / 100:g}$ net) · "
+             f"stop -{c.sl_loss_usdt:g}$ net" if c.fixed else ""),
             (f"Supertrend({c.st_len},{c.st_mult:g}) + EMA{c.ema_slow} · stop ST∓{c.st_stop_atr:g}ATR "
              f"(%{c.min_sl_pct:g}–%{c.max_sl_pct:g}) · cikis: ST donusu" if c.trailing else
              f"SL {c.atr_sl_mult:g}×ATR (%{c.min_sl_pct:g}–%{c.max_sl_pct:g}) · TP {c.tp_r_mult:g}R · "

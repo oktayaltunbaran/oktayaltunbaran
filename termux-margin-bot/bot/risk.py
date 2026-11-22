@@ -130,6 +130,58 @@ def size_position(
     )
 
 
+def size_fixed(
+    cfg: Settings,
+    side: str,
+    entry: float,
+    contract_size: float,
+    amount_to_precision: Callable[[float], float],
+    min_amount: Optional[float],
+    min_cost: Optional[float],
+    free_balance: Optional[float],
+) -> SizePlan:
+    """Kullanici semasi: FIXED_MARGIN_USDT x LEVERAGE nominal; stop ve hedef fiyat
+    oranlari sabit (net 2.5$ zarar / net %25 ROI). Bakiye yetmezse nominal kuculur,
+    oranlar ayni kalir (zarar/kar orantili kuculur)."""
+    if entry <= 0 or contract_size <= 0:
+        raise RiskReject("Gecersiz fiyat/kontrat verisi")
+    slf, tpf = cfg.fixed_fracs()
+    if slf <= 0:
+        raise RiskReject("Stop mesafesi komisyondan kucuk")
+    target = cfg.fixed_margin_usdt * cfg.leverage
+    capped = False
+    if free_balance is not None and target > free_balance * cfg.leverage * 0.97:
+        target = free_balance * cfg.leverage * 0.97
+        capped = True
+    try:
+        qty = float(amount_to_precision(target / (entry * contract_size)))
+    except Exception:  # noqa: BLE001
+        qty = 0.0
+    if qty <= 0 or math.isnan(qty):
+        raise RiskReject(f"Bakiye/hassasiyet nedeniyle miktar 0 (hedef nominal {target:.2f} USDT)")
+    notional = qty * contract_size * entry
+    if min_amount is not None and qty < min_amount:
+        raise RiskReject(f"Miktar {qty} < borsa min {min_amount}")
+    if min_cost is not None and notional < min_cost:
+        raise RiskReject(f"Nominal {notional:.2f} USDT < borsa min {min_cost:g} USDT")
+    # Stop/hedef GERCEK nominale gore: net zarar tam SL_LOSS_USDT, net kar en az
+    # FIXED_MARGIN_USDT * TP_ROI_PCT (bakiye/komisyon nedeniyle nominal biraz kucuk olsa bile)
+    cost = notional * (2 * cfg.fee_rate + cfg.slippage_pct / 100)
+    slf = (cfg.sl_loss_usdt - cost) / notional
+    tpf = (cfg.fixed_margin_usdt * cfg.tp_roi_pct / 100 + cost) / notional
+    if slf <= 0:
+        raise RiskReject("Nominal cok kucuk: stop komisyonun icinde kaliyor")
+    d = 1 if side == "long" else -1
+    sl = entry * (1 - d * slf)
+    tp = entry * (1 + d * tpf)
+    loss = notional * slf + cost
+    liq = liquidation_estimate(side, entry, cfg.leverage, cfg.maint_margin_rate)
+    if abs(entry - sl) >= 0.7 * abs(entry - liq):
+        raise RiskReject("Stop likidasyona cok yakin")
+    return SizePlan(qty=qty, contract_size=contract_size, entry=entry, sl=sl, tp=tp, notional=notional,
+                    margin=notional / cfg.leverage, loss_at_sl=loss, liq_est=liq, capped_by_leverage=capped)
+
+
 def realized_pnl(side: str, entry: float, exit_: float, base_qty: float, fee_rate: float) -> tuple:
     """(net_pnl, fees). Komisyon her iki bacak icin nominal uzerinden."""
     direction = 1 if side == "long" else -1
